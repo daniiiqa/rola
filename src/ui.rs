@@ -1,5 +1,5 @@
 use crate::api::Kind;
-use crate::config::Select;
+use crate::config::{Labels, Select};
 use crate::i18n::fill;
 use crate::settings::{self, SECTIONS};
 use crate::{App, Focus, Lyrics, Popup, Repeat, Side};
@@ -36,12 +36,21 @@ impl App {
         a
     }
 
-    /// El icono de Nerd Font, o su versión en texto si los iconos están apagados.
+    /// El icono de Nerd Font, o su versión en texto si los botones van con palabras.
     fn ic(&self, nerd: &'static str, plain: &'static str) -> &'static str {
-        if self.cfg.icons {
+        if self.cfg.labels == Labels::Icons {
             nerd
         } else {
             plain
+        }
+    }
+
+    /// Como `ic`, pero con la palabra entera (traducida) para «palabras enteras».
+    fn ic3(&self, nerd: &'static str, short: &'static str, word: &'static str) -> String {
+        match self.cfg.labels {
+            Labels::Icons => nerd.into(),
+            Labels::Short => self.tx(short),
+            Labels::Words => self.tx(word),
         }
     }
 
@@ -406,16 +415,19 @@ impl App {
         let [top, prog] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
         let on = |b: bool| if b { Style::new().fg(t.primary).bold() } else { Style::new().fg(t.muted) };
+        let w = self.s().words;
         let rep = match self.repeat {
-            Repeat::Off => self.ic("\u{f0457}", "rep"),
-            Repeat::All => self.ic("\u{f0456}", "rep"),
-            Repeat::One => self.ic("\u{f0458}", "rep1"),
+            Repeat::Off => self.ic3("\u{f0457}", "rep", w[1]),
+            Repeat::All => self.ic3("\u{f0456}", "rep", w[1]),
+            Repeat::One => self.ic3("\u{f0458}", "rep1", w[2]),
         };
+        // las palabras enteras necesitan más aire entre sí
+        let gap = if self.cfg.labels == Labels::Words { "  " } else { " " };
         let flags = Line::from(vec![
-            Span::styled(format!("{} ", self.ic(I_SHUFFLE, "shuf")), on(self.shuffle)),
-            Span::styled(format!("{rep} "), on(self.repeat != Repeat::Off)),
-            Span::styled(format!("{} ", self.ic(I_RADIO, "auto")), on(self.autoplay)),
-            Span::styled(format!("{} {}%", self.ic(I_VOL, "vol"), self.volume), Style::new().fg(t.fg)),
+            Span::styled(format!("{}{gap}", self.ic3(I_SHUFFLE, "shuf", w[0])), on(self.shuffle)),
+            Span::styled(format!("{rep}{gap}"), on(self.repeat != Repeat::Off)),
+            Span::styled(format!("{}{gap}", self.ic3(I_RADIO, "auto", w[3])), on(self.autoplay)),
+            Span::styled(format!("{} {}%", self.ic3(I_VOL, "vol", w[4]), self.volume), Style::new().fg(t.fg)),
         ]);
         let [left, right] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(flags.width() as u16 + 1)]).areas(top);

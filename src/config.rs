@@ -71,6 +71,8 @@ choice!(Borders {
 });
 choice!(Bar { Line => "line", Knob => "knob", Blocks => "blocks", Dots => "dots", Ascii => "ascii" });
 choice!(Quality { Best => "best", Medium => "medium", Low => "low" });
+// cómo se rotulan los botones: iconos de Nerd Font, palabras cortas o enteras
+choice!(Labels { Icons => "icons", Short => "short", Words => "words" });
 // mayúsculas/minúsculas en los rótulos de la interfaz (no en títulos de canciones)
 choice!(Case { Normal => "normal", Upper => "upper", Lower => "lower" });
 // cómo se marca la fila elegida
@@ -141,7 +143,7 @@ pub struct Config {
     pub transparent: bool,
     pub borders: Borders,
     pub bar: Bar,
-    pub icons: bool,
+    pub labels: Labels,
     pub case: Case,
     pub select: Select,
     pub tint: Tint,
@@ -181,7 +183,7 @@ impl Default for Config {
             transparent: true,
             borders: Borders::Auto,
             bar: Bar::Line,
-            icons: true,
+            labels: Labels::Icons,
             case: Case::Normal,
             select: Select::Fill,
             tint: Tint::Color,
@@ -232,7 +234,11 @@ impl Config {
             transparent: v["transparent"].as_bool().unwrap_or(d.transparent),
             borders: pick(&v["borders"], d.borders),
             bar: pick(&v["bar"], d.bar),
-            icons: v["icons"].as_bool().unwrap_or(d.icons),
+            // antes era "icons": sí/no
+            labels: v["labels"].as_str().and_then(Labels::parse).unwrap_or(match v["icons"].as_bool() {
+                Some(false) => Labels::Short,
+                _ => d.labels,
+            }),
             case: pick(&v["case"], d.case),
             select: pick(&v["select"], d.select),
             tint: pick(&v["tint"], d.tint),
@@ -245,7 +251,7 @@ impl Config {
             notify_secs: num("notify_secs", d.notify_secs, 1, 60),
             restore: v["restore"].as_bool().unwrap_or(d.restore),
             wallust: v["wallust"].as_str().map(PathBuf::from).unwrap_or(d.wallust),
-            look: over.keys().cloned().collect(),
+            look: over.keys().map(|k| if k == "icons" { "labels".into() } else { k.clone() }).collect(),
             base,
         }
     }
@@ -261,7 +267,7 @@ impl Config {
             "transparent": self.transparent,
             "borders": self.borders.key(),
             "bar": self.bar.key(),
-            "icons": self.icons,
+            "labels": self.labels.key(),
             "case": self.case.key(),
             "select": self.select.key(),
             "tint": self.tint.key(),

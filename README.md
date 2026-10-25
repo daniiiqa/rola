@@ -31,7 +31,7 @@ en las demás con medios bloques.
   duración de los avisos.
 - **Apariencia**: tema, fondo (el de la terminal o el del tema), bordes
   (como Hyprland, redondeados, rectos, dobles, gruesos, punteados, sin bordes),
-  estilo de la barra de progreso, iconos Nerd Font o en texto, rótulos en
+  estilo de la barra de progreso, botones con iconos Nerd Font, palabras cortas o enteras, rótulos en
   mayúsculas o minúsculas, cómo se marca la fila elegida (relleno, barra al
   lado, invertida), color (normal, fósforo, tinta), ancho de la barra lateral y de la
   letra, atajos al pie, portada.
