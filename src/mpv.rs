@@ -1,5 +1,4 @@
-//! mpv por IPC. mpv-mpris (si está instalado) lo publica por MPRIS, así que
-//! waybar y playerctl lo ven como cualquier reproductor.
+//! mpv por IPC. El MPRIS no es cosa suya sino de rola (ver mpris.rs).
 
 use crate::Ev;
 use serde_json::{json, Value};
@@ -38,6 +37,9 @@ impl Mpv {
             "--no-terminal",
             "--force-window=no",
             "--title=rola",
+            // ni mpv-mpris ni otros scripts del sistema: el MPRIS lo pone rola,
+            // que es quien sabe qué va después (ytdl_hook viene dentro, sigue)
+            "--load-scripts=no",
             // el cliente por defecto de yt-dlp da 403 al stremear; web_music no
             "--ytdl-raw-options-append=extractor-args=youtube:player_client=web_music",
         ])

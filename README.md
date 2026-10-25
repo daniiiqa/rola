@@ -10,7 +10,7 @@ interna de YouTube Music, sin runtime ni librerías de Python.
 ## Instalar
 
 ```bash
-sudo pacman -S --needed mpv yt-dlp mpv-mpris
+sudo pacman -S --needed mpv yt-dlp
 cargo install --path . --root ~/.local --force   # deja ~/.local/bin/rola
 ```
 

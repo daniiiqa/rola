@@ -8,6 +8,7 @@ mod config;
 mod hypr;
 mod i18n;
 mod mouse;
+mod mpris;
 mod mpv;
 mod settings;
 mod stream;
@@ -32,6 +33,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub enum Ev {
     Key(KeyEvent),
     Mouse(MouseEvent),
+    Media(mpris::Media), // desde fuera: playerctl, teclas multimedia…
     Resize,
     Prop(String, Value),
     End(bool),
@@ -158,6 +160,8 @@ struct App {
     splash: Option<Instant>,      // canción nueva: su nombre arriba un momento
     hits: RefCell<mouse::Hits>,   // dónde quedó cada cosa al dibujar
     last_click: Option<(Instant, u16, u16)>,
+    mpris: Option<mpris::Mpris>,
+    track_n: u64, // sube con cada canción que se pone (para MPRIS)
 }
 
 /// Lo que dura el aviso de canción nueva.
@@ -196,7 +200,7 @@ impl App {
         let api = Api::new(&data_dir().join("auth.json"));
         let mut app = App {
             api,
-            tx,
+            tx: tx.clone(),
             mpv,
             theme: theme::load(&cfg),
             theme_mtime: theme::mtime(theme::source(&cfg).as_deref()),
@@ -250,6 +254,8 @@ impl App {
             splash: None,
             hits: RefCell::default(),
             last_click: None,
+            mpris: mpris::Mpris::start(tx.clone()),
+            track_n: 0,
         };
         app.fill_side(&[]);
         if !app.cfg.restore {
@@ -483,6 +489,7 @@ impl App {
         let start = self.resume.take().filter(|r| r.0 == i).map(|r| r.1);
         self.qi = Some(i);
         self.song_start = Instant::now();
+        self.track_n += 1;
         self.splash = Some(Instant::now());
         self.added = 0;
         self.loaded = true;
@@ -740,6 +747,7 @@ impl App {
         match ev {
             Ev::Key(k) => self.key(k),
             Ev::Mouse(m) => self.mouse(m),
+            Ev::Media(m) => self.media(m),
             Ev::Resize => {}
             Ev::Prop(name, data) => match name.as_str() {
                 // sin nada cargado mpv dice null y se perdería la posición restaurada
@@ -940,39 +948,17 @@ impl App {
             KeyCode::Char(' ') => {
                 if self.qi.is_none() {
                     self.activate();
-                } else if !self.loaded {
-                    self.play_index(self.qi.unwrap_or(0));
                 } else {
-                    self.mpv.cmd(json!(["cycle", "pause"]));
+                    self.play_pause();
                 }
             }
             KeyCode::Char('n') => self.advance(false),
-            KeyCode::Char('p') => {
-                let qi = self.qi.unwrap_or(0);
-                if !self.loaded {
-                    self.resume = None;
-                }
-                if (self.pos.unwrap_or(0.0) > 3.0 || qi == 0) && self.loaded {
-                    self.mpv.cmd(json!(["seek", 0, "absolute"]));
-                } else if self.pos.unwrap_or(0.0) > 3.0 || qi == 0 {
-                    self.play_index(qi);
-                } else {
-                    self.play_index(qi - 1);
-                }
-            }
+            KeyCode::Char('p') => self.previous(),
             KeyCode::Char('<') => self.mpv.cmd(json!(["seek", -self.cfg.seek, "relative"])),
             KeyCode::Char('>') => self.mpv.cmd(json!(["seek", self.cfg.seek, "relative"])),
             KeyCode::Char('+') | KeyCode::Char('=') => self.set_volume(self.cfg.vol_step),
             KeyCode::Char('-') => self.set_volume(-self.cfg.vol_step),
-            KeyCode::Char('s') => {
-                self.shuffle = !self.shuffle;
-                if let (true, Some(qi)) = (self.shuffle, self.qi) {
-                    let mut rest = self.queue.split_off(qi + 1);
-                    self.shuffle_vec(&mut rest);
-                    self.queue.extend(rest);
-                    self.added = 0;
-                }
-            }
+            KeyCode::Char('s') => self.set_shuffle(!self.shuffle),
             KeyCode::Char('r') => {
                 self.repeat = match self.repeat {
                     Repeat::Off => Repeat::All,
@@ -990,6 +976,103 @@ impl App {
             KeyCode::Char('L') => self.like(),
             _ => {}
         }
+    }
+
+    /// Pausa o sigue; con la sesión restaurada sin cargar, la arranca.
+    fn play_pause(&mut self) {
+        match self.qi {
+            None => {}
+            Some(q) if !self.loaded => self.play_index(q),
+            Some(_) => self.mpv.cmd(json!(["cycle", "pause"])),
+        }
+    }
+
+    fn set_paused(&mut self, p: bool) {
+        if self.loaded {
+            self.mpv.cmd(json!(["set_property", "pause", p]));
+        } else if !p {
+            self.play_pause();
+        }
+    }
+
+    /// Al principio de la canción si ya lleva un rato; si no, la anterior.
+    fn previous(&mut self) {
+        let qi = self.qi.unwrap_or(0);
+        if !self.loaded {
+            self.resume = None;
+        }
+        if (self.pos.unwrap_or(0.0) > 3.0 || qi == 0) && self.loaded {
+            self.mpv.cmd(json!(["seek", 0, "absolute"]));
+        } else if self.pos.unwrap_or(0.0) > 3.0 || qi == 0 {
+            self.play_index(qi);
+        } else {
+            self.play_index(qi - 1);
+        }
+    }
+
+    fn set_shuffle(&mut self, on: bool) {
+        self.shuffle = on;
+        if let (true, Some(qi)) = (self.shuffle, self.qi) {
+            let mut rest = self.queue.split_off(qi + 1);
+            self.shuffle_vec(&mut rest);
+            self.queue.extend(rest);
+            self.added = 0;
+        }
+    }
+
+    // ── MPRIS ──
+    fn media(&mut self, m: mpris::Media) {
+        use mpris::Media as M;
+        match m {
+            M::Next => self.advance(false),
+            M::Previous => self.previous(),
+            M::PlayPause => self.play_pause(),
+            M::Play => self.set_paused(false),
+            M::Pause | M::Stop => self.set_paused(true),
+            M::Seek(us) if self.loaded => self.mpv.cmd(json!(["seek", us as f64 / 1e6, "relative"])),
+            M::SetPos(us) if self.loaded => self.mpv.cmd(json!(["seek", us as f64 / 1e6, "absolute"])),
+            M::Seek(_) | M::SetPos(_) => {}
+            M::Volume(v) => self.set_volume((v * 100.0).round() as i64 - self.volume),
+            M::Shuffle(on) => self.set_shuffle(on),
+            M::Loop(l) => {
+                self.repeat = match l.as_str() {
+                    "Track" => Repeat::One,
+                    "Playlist" => Repeat::All,
+                    _ => Repeat::Off,
+                }
+            }
+            M::Quit => self.quit = true,
+        }
+    }
+
+    /// Le pasa a MPRIS cómo está todo (solo se avisa de lo que cambió).
+    fn mpris_sync(&mut self) {
+        let Some(m) = &mut self.mpris else { return };
+        let it = self.qi.and_then(|i| self.queue.get(i));
+        let n = self.queue.len();
+        let st = mpris::State {
+            status: match it {
+                None => "Stopped",
+                Some(_) if self.loaded && !self.paused => "Playing",
+                Some(_) => "Paused",
+            },
+            track: self.track_n,
+            title: it.map(|x| x.title.clone()).unwrap_or_default(),
+            artist: it.map(|x| x.artist.clone()).unwrap_or_default(),
+            album: it.map(|x| x.album.clone()).unwrap_or_default(),
+            art: it.and_then(|x| x.cover_url()).unwrap_or_default(),
+            length: self.dur.map(|d| (d * 1e6) as i64).unwrap_or(0),
+            volume: self.volume as f64 / 100.0,
+            shuffle: self.shuffle,
+            loop_status: match self.repeat {
+                Repeat::Off => "None",
+                Repeat::All => "Playlist",
+                Repeat::One => "Track",
+            },
+            can_next: self.qi.is_some_and(|q| q + 1 < n) || self.repeat == Repeat::All || self.autoplay,
+            can_prev: self.qi.is_some(),
+        };
+        m.update(st, self.pos);
     }
 
     fn nav(&mut self, d: isize) {
@@ -1176,6 +1259,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         if app.quit {
             break Ok(());
         }
+        app.mpris_sync();
         if last_tick.elapsed() >= Duration::from_millis(500) {
             urgent |= app.tick();
             last_tick = Instant::now();
