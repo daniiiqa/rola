@@ -16,6 +16,7 @@ mod notif;
 mod palette;
 mod settings;
 mod spotify;
+mod stats;
 mod stream;
 mod theme;
 mod ui;
@@ -108,6 +109,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// rola wrapped: lo escuchado, por periodo (0 mes, 1 año, 2 siempre)
+    Wrapped { period: usize, plays: Vec<stats::Play> },
     /// conectar Spotify: el Client ID que se va escribiendo
     Spotify { input: String, busy: bool, err: Option<String> },
 }
@@ -186,6 +189,7 @@ struct App {
     xfaded: u64,                          // track_n de la que ya empezó a fundirse
     fade_in: Option<f64>,                 // la siguiente que se cargue entra subiendo en tantos s
     af_on: bool,                          // mpv tiene puesto el filtro de entrada
+    listened: f64,                        // segundos oídos de verdad de la actual (sin saltos)
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -302,6 +306,7 @@ impl App {
             xfaded: 0,
             fade_in: None,
             af_on: false,
+            listened: 0.0,
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -668,6 +673,7 @@ impl App {
     }
 
     fn play_index(&mut self, i: usize) {
+        self.log_play();
         self.sp_wait = None;
         if let Some(it) = self.queue.get(i).filter(|x| x.video_id.is_none()).cloned() {
             let Some(sp) = it.sp_track().map(String::from) else { return };
@@ -1004,6 +1010,7 @@ impl App {
     }
 
     fn stop(&mut self) {
+        self.log_play();
         if self.loaded {
             self.mpv.cmd(json!(["stop"]));
         }
@@ -1094,6 +1101,9 @@ impl App {
             if matches!(popup, Popup::Spotify { .. }) {
                 return self.spotify_key(k);
             }
+            if matches!(popup, Popup::Wrapped { .. }) {
+                return self.wrapped_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -1126,6 +1136,7 @@ impl App {
         let Some(qi) = self.qi else { return };
         // «al acabar esta»: se queda lista la siguiente, sin sonar
         if auto && self.sleep == Sleep::EndOfSong {
+            self.log_play();
             self.sleep = Sleep::Off;
             self.notify(self.s().sleep_done, false);
             if qi + 1 < self.queue.len() {
@@ -1196,6 +1207,12 @@ impl App {
             Ev::Prop(name, data) => match name.as_str() {
                 // sin nada cargado mpv dice null y se perdería la posición restaurada
                 "time-pos" if self.loaded => {
+                    // lo oído: avanzar poco a poco cuenta, un salto no
+                    if let (Some(old), Some(new)) = (self.pos, data.as_f64()) {
+                        if (0.0..2.5).contains(&(new - old)) {
+                            self.listened += new - old;
+                        }
+                    }
                     self.pos = data.as_f64();
                     self.maybe_crossfade();
                 }
@@ -1499,6 +1516,7 @@ impl App {
             KeyCode::Char('L') => self.like(),
             KeyCode::Char('t') => self.cycle_sleep(),
             KeyCode::Char('Y') => self.copy_link(),
+            KeyCode::Char('W') => self.open_wrapped(),
             _ => {}
         }
     }
@@ -1562,6 +1580,30 @@ impl App {
         };
         if let Some(tx) = &self.desktop {
             let _ = tx.send(song);
+        }
+    }
+
+    // ── lo escuchado ──
+    /// Apunta la actual si se oyó lo bastante, y empieza la cuenta de nuevo.
+    fn log_play(&mut self) {
+        let secs = std::mem::take(&mut self.listened);
+        let Some(it) = self.current().filter(|_| secs >= stats::MIN_SECS) else { return };
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let play = stats::Play { t: now, title: it.title.clone(), artist: it.artist.clone(), secs };
+        stats::log(&data_dir().join("history.jsonl"), &play, it.video_id.as_deref().unwrap_or(""));
+    }
+
+    fn open_wrapped(&mut self) {
+        let plays = stats::load(&data_dir().join("history.jsonl"));
+        self.popup = Some(Popup::Wrapped { period: 0, plays });
+    }
+
+    fn wrapped_key(&mut self, k: KeyEvent) {
+        let Some(Popup::Wrapped { period, .. }) = &mut self.popup else { return };
+        match k.code {
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => *period = (*period + 1) % 3,
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => *period = (*period + 2) % 3,
+            _ => self.popup = None,
         }
     }
 
@@ -1966,6 +2008,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
     };
     mouse_capture(false);
     ratatui::restore();
+    app.log_play();
     app.save_state();
     if !app.sp_match.is_empty() {
         let _ = std::fs::write(data_dir().join("spotify-match.json"), serde_json::to_string(&app.sp_match).unwrap_or_default());

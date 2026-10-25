@@ -118,6 +118,13 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## rola wrapped
+
+`W`: cuánto has escuchado, tus artistas y canciones de cabecera, a qué horas y
+cuántos días seguidos llevas; este mes, este año o desde siempre (`h`/`l`).
+rola apunta cada canción que oyes al menos 30 s en
+`~/.local/share/rola/history.jsonl`. No sale de tu equipo.
+
 ## Colores de la portada
 
 `o` → «Colores de la portada»: el color principal y el de acento salen de la

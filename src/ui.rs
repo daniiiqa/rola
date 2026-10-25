@@ -209,8 +209,15 @@ impl App {
         let (hold, step) = (2000u128, 180u128);
         let e = self.song_start.elapsed().as_millis() % (hold + step * n as u128);
         let off = if e < hold { 0 } else { ((e - hold) / step) as usize };
+        // justo `w` columnas: así puede ir algo detrás
         let mut out: Vec<Span<'static>> = Vec::new();
+        let mut used = 0;
         for (c, st) in cells.iter().cycle().skip(off).take(n + w as usize) {
+            let cw = Span::raw(c.to_string()).width();
+            if used + cw > w as usize {
+                break;
+            }
+            used += cw;
             match out.last_mut() {
                 Some(l) if l.style == *st => l.content.to_mut().push(*c),
                 _ => out.push(Span::styled(c.to_string(), *st)),
@@ -309,6 +316,7 @@ impl App {
             Some(Popup::AddTo { .. }) => self.draw_add_to(f),
             Some(Popup::Login { .. }) => self.draw_login(f),
             Some(Popup::Spotify { .. }) => self.draw_spotify(f),
+            Some(Popup::Wrapped { period, plays }) => self.draw_wrapped(f, *period, plays),
             None => {}
         }
     }
@@ -595,6 +603,117 @@ impl App {
                 }
             }
         }
+    }
+
+    /// rola wrapped: cuánto, a quién, qué y a qué horas, del periodo elegido.
+    fn draw_wrapped(&self, f: &mut Frame, period: usize, plays: &[crate::stats::Play]) {
+        use crate::stats::{summary, Period};
+        let (t, s) = (self.theme, self.s());
+        let w = 92.min(f.area().width.saturating_sub(4));
+        let h = 20.min(f.area().height.saturating_sub(2));
+        let area = self.popup_area(f, w, h);
+        self.hits.borrow_mut().popup = area;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let sum = summary(plays, Period::ALL[period], now);
+        // las pestañas de periodo en el título, la elegida resaltada
+        let mut title = vec![Span::styled(" rola wrapped ", Style::new().fg(t.primary).bold())];
+        for (i, p) in s.wr_periods.iter().enumerate() {
+            let st = if i == period { Style::new().fg(t.base).bg(t.primary).bold() } else { Style::new().fg(t.muted) };
+            title.push(Span::raw(" "));
+            title.push(Span::styled(format!(" {} ", self.tx(p)), st));
+        }
+        title.push(Span::raw(" "));
+        let block = self.block(true).title(Line::from(title)).padding(ratatui::widgets::Padding::new(2, 2, 1, 0));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        if sum.plays == 0 {
+            let p = Paragraph::new(Line::styled(s.wr_empty, Style::new().fg(t.muted).italic())).centered().wrap(Wrap { trim: true });
+            let [mid] = Layout::vertical([Constraint::Length(3)]).flex(Flex::Center).areas(inner);
+            return f.render_widget(p, mid);
+        }
+        let dur = |secs: f64| if secs < 3600.0 { format!("{} min", (secs / 60.0).round()) } else { format!("{:.1} h", secs / 3600.0) };
+        let [head, _, cols, _, hours] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(6),
+            Constraint::Length(1),
+            Constraint::Length(7),
+        ])
+        .areas(inner);
+        // el total, grande y en degradado
+        let big = dur(sum.secs);
+        let n = big.chars().count().max(1);
+        let mut l1: Vec<Span> =
+            big.chars().enumerate().map(|(i, c)| Span::styled(c.to_string(), Style::new().fg(self.gradient(i as f64 / n as f64)).bold())).collect();
+        l1.push(Span::styled(format!(" {}", s.wr_time), Style::new().fg(t.fg)));
+        let mut l2 = vec![Span::styled(fill(s.wr_plays, &[&sum.plays.to_string(), &sum.songs.to_string()]), Style::new().fg(t.muted))];
+        if sum.streak > 1 {
+            l2.push(Span::styled("  ·  ", Style::new().fg(t.muted)));
+            l2.push(Span::styled(format!("{} {}", self.ic("\u{f0238}", "*"), fill(s.wr_streak, &[&sum.streak.to_string()])), Style::new().fg(t.accent)));
+        }
+        f.render_widget(Paragraph::new(vec![Line::from(l1), Line::from(l2)]), head);
+
+        let [left, _, right] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(3), Constraint::Fill(1)]).areas(cols);
+        let header = |x: &str| Line::styled(self.tx(x), Style::new().fg(t.primary).bold());
+        // artistas, con su barra
+        let mut lines = vec![header(s.wr_artists)];
+        let top = sum.artists.first().map_or(1.0, |a| a.1);
+        let name_w = 16.min(left.width.saturating_sub(16) as usize).max(6);
+        let bar_w = (left.width as usize).saturating_sub(name_w + 12).max(3);
+        for (i, (a, secs)) in sum.artists.iter().enumerate() {
+            let cells = ((secs / top) * bar_w as f64).round().max(1.0) as usize;
+            let name: String = a.chars().take(name_w).collect();
+            let mut spans = vec![
+                Span::styled(format!("{} ", i + 1), Style::new().fg(t.muted)),
+                Span::styled(format!("{name:<name_w$} "), Style::new().fg(t.fg)),
+            ];
+            spans.extend((0..cells).map(|k| Span::styled("█", Style::new().fg(self.gradient(k as f64 / bar_w as f64)))));
+            spans.push(Span::styled(format!(" {}", dur(*secs)), Style::new().fg(t.muted)));
+            lines.push(Line::from(spans));
+        }
+        f.render_widget(Paragraph::new(lines), left);
+        // canciones, con las veces
+        let mut lines = vec![header(s.wr_songs)];
+        for (i, (title, artist, n)) in sum.top.iter().enumerate() {
+            // el número y las veces quietos; lo que se desplaza, si no cabe, es la canción
+            let times = format!(" ×{n}");
+            let room = right.width.saturating_sub(2 + times.chars().count() as u16);
+            let song = vec![Span::styled(title.clone(), Style::new().fg(t.fg)), Span::styled(format!(" · {artist}"), Style::new().fg(t.muted))];
+            let mut spans = vec![Span::styled(format!("{} ", i + 1), Style::new().fg(t.muted))];
+            spans.extend(self.marquee(song, room).spans);
+            spans.push(Span::styled(times, Style::new().fg(t.accent).bold()));
+            lines.push(Line::from(spans));
+        }
+        f.render_widget(Paragraph::new(lines), right);
+
+        // a qué horas: un histograma de 4 filas, una columna (doble) por hora
+        let peak = sum.hours.iter().cloned().fold(0.0, f64::max).max(1.0);
+        let best = sum.hours.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map_or(0, |x| x.0);
+        let lv = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+        let rows = 4;
+        let mut lines = vec![Line::from(vec![
+            Span::styled(self.tx(s.wr_hours), Style::new().fg(t.primary).bold()),
+            Span::styled(format!("   {}", fill(s.wr_peak, &[&best.to_string()])), Style::new().fg(t.muted)),
+        ])];
+        for r in (0..rows).rev() {
+            let spans: Vec<Span> = (0..24)
+                .map(|hr| {
+                    let v = sum.hours[hr] / peak * (rows * 8) as f64;
+                    let c = match v - (r * 8) as f64 {
+                        x if x >= 8.0 => '█',
+                        x if x > 0.0 => lv[(x as usize).min(7)],
+                        _ if r == 0 => '▁',
+                        _ => ' ',
+                    };
+                    let col = if sum.hours[hr] > 0.0 { self.gradient(hr as f64 / 23.0) } else { t.border };
+                    Span::styled(format!("{c}{c} "), Style::new().fg(col))
+                })
+                .collect();
+            lines.push(Line::from(spans));
+        }
+        let marks: String = (0..24).map(|hr| if hr % 6 == 0 { format!("{hr:<3}") } else { "   ".into() }).collect();
+        lines.push(Line::styled(marks, Style::new().fg(t.muted)));
+        f.render_widget(Paragraph::new(lines), hours);
     }
 
     fn draw_help(&self, f: &mut Frame) {
@@ -1093,6 +1212,7 @@ impl App {
             (Some(Popup::Settings { .. }), _) => s.foot_settings,
             (Some(Popup::Login { .. }), _) => s.foot_login,
             (Some(Popup::Spotify { .. }), _) => s.foot_spotify,
+            (Some(Popup::Wrapped { .. }), _) => s.foot_wrapped,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
