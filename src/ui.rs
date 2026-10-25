@@ -3,7 +3,7 @@ use crate::config::{Bar, Labels, Select, Tint};
 use crate::i18n::fill;
 use crate::mouse::{Button, Hits};
 use crate::settings::{self, SECTIONS};
-use crate::{App, Focus, Lyrics, Popup, Repeat, Side, SPLASH};
+use crate::{App, Focus, Lyrics, Popup, Repeat, Side, Sleep, SPLASH};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -168,7 +168,7 @@ impl App {
         }
     }
 
-    fn playing(&self) -> bool {
+    pub fn playing(&self) -> bool {
         self.loaded && !self.paused
     }
 
@@ -1000,6 +1000,16 @@ impl App {
             Span::styled(format!("{}{gap}", self.ic3(I_RADIO, "auto", w[3])), on(self.autoplay)),
             Span::styled(format!("{} {}%", self.ic3(I_VOL, "vol", w[4]), self.volume), Style::new().fg(t.fg)),
         ]);
+        let mut flags = flags;
+        // con temporizador, lo que queda al final (minutos, o «fin» de esta canción)
+        let left = match (self.sleep, self.sleep_left()) {
+            (Sleep::Off, _) => None,
+            (_, Some(m)) => Some(format!("{m}m")),
+            _ => Some(self.tx(self.s().sleep_end)),
+        };
+        if let Some(left) = left {
+            flags.spans.push(Span::styled(format!("{gap}{} {left}", self.ic("\u{f04b2}", "zz")), Style::new().fg(t.accent)));
+        }
         let [left, right] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(flags.width() as u16 + 1)]).areas(top);
         {

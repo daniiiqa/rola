@@ -72,6 +72,17 @@ enum Side {
     SpAlbums,
 }
 
+/// Temporizador para dormir.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Sleep {
+    Off,
+    EndOfSong,
+    At(Instant),
+}
+
+/// Lo que tarda en bajar el volumen antes de pararse.
+const SLEEP_FADE: f64 = 12.0;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
     Search,
@@ -162,6 +173,7 @@ struct App {
     lyrics_hand: Option<Instant>, // cuándo se movió a mano (deja de seguir a la canción un rato)
     lyrics_auto: Cell<u16>,       // dónde la dejó el último dibujo siguiendo a la canción
     lyrics_total: Cell<u16>,      // filas de la letra con tiempos (ya partidas al ancho)
+    sleep: Sleep,
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -266,6 +278,7 @@ impl App {
             lyrics_hand: None,
             lyrics_auto: Cell::new(0),
             lyrics_total: Cell::new(0),
+            sleep: Sleep::Off,
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -1052,6 +1065,15 @@ impl App {
 
     fn advance(&mut self, auto: bool) {
         let Some(qi) = self.qi else { return };
+        // «al acabar esta»: se queda lista la siguiente, sin sonar
+        if auto && self.sleep == Sleep::EndOfSong {
+            self.sleep = Sleep::Off;
+            self.notify(self.s().sleep_done, false);
+            if qi + 1 < self.queue.len() {
+                self.qi = Some(qi + 1);
+            }
+            return self.stop();
+        }
         if auto && self.repeat == Repeat::One {
             return self.play_index(qi);
         }
@@ -1117,7 +1139,8 @@ impl App {
                 "time-pos" if self.loaded => self.pos = data.as_f64(),
                 "duration" if self.loaded => self.dur = data.as_f64(),
                 "pause" => self.paused = data.as_bool().unwrap_or(true),
-                "volume" => {
+                // la bajada del temporizador no es tu volumen
+                "volume" if !self.fading() => {
                     if let Some(v) = data.as_f64() {
                         self.volume = v.round() as i64;
                     }
@@ -1403,6 +1426,7 @@ impl App {
                 }
             }
             KeyCode::Char('L') => self.like(),
+            KeyCode::Char('t') => self.cycle_sleep(),
             _ => {}
         }
     }
@@ -1446,6 +1470,57 @@ impl App {
             self.shuffle_vec(&mut rest);
             self.queue.extend(rest);
             self.added = 0;
+        }
+    }
+
+    // ── temporizador ──
+    /// t: no → al acabar esta → 15 → 30 → 45 → 60 → 90 min → no.
+    fn cycle_sleep(&mut self) {
+        const MINS: [u64; 5] = [15, 30, 45, 60, 90];
+        let at = |m: u64| Sleep::At(Instant::now() + Duration::from_secs(m * 60));
+        self.sleep = match self.sleep {
+            Sleep::Off => Sleep::EndOfSong,
+            Sleep::EndOfSong => at(MINS[0]),
+            // desde lo que queda: pulsar otra vez da el siguiente escalón
+            Sleep::At(_) => match MINS.iter().find(|&&m| m > self.sleep_left().unwrap_or(0) + 1) {
+                Some(&m) => at(m),
+                None => Sleep::Off,
+            },
+        };
+        // si estaba bajando el volumen, vuelve a como estaba
+        self.mpv.cmd(json!(["set_property", "volume", self.volume]));
+        let s = self.s();
+        let msg = match self.sleep {
+            Sleep::Off => s.sleep_off.to_string(),
+            Sleep::EndOfSong => s.sleep_eos.to_string(),
+            Sleep::At(_) => fill(s.sleep_in, &[&self.sleep_left().unwrap_or(0).to_string()]),
+        };
+        self.notify(msg, false);
+    }
+
+    /// Minutos que quedan (redondeando hacia arriba).
+    pub fn sleep_left(&self) -> Option<u64> {
+        match self.sleep {
+            Sleep::At(t) => Some(t.saturating_duration_since(Instant::now()).as_secs().div_ceil(60)),
+            _ => None,
+        }
+    }
+
+    fn fading(&self) -> bool {
+        matches!(self.sleep, Sleep::At(t) if t.saturating_duration_since(Instant::now()).as_secs_f64() < SLEEP_FADE)
+    }
+
+    /// Los últimos segundos baja el volumen poco a poco, y luego pausa.
+    fn sleep_tick(&mut self) {
+        let Sleep::At(t) = self.sleep else { return };
+        let left = t.saturating_duration_since(Instant::now()).as_secs_f64();
+        if left <= 0.0 {
+            self.sleep = Sleep::Off;
+            self.set_paused(true);
+            self.mpv.cmd(json!(["set_property", "volume", self.volume]));
+            self.notify(self.s().sleep_done, false);
+        } else if left < SLEEP_FADE && self.playing() {
+            self.mpv.cmd(json!(["set_property", "volume", self.volume as f64 * left / SLEEP_FADE]));
         }
     }
 
@@ -1654,6 +1729,7 @@ impl App {
         let mut changed = self.check_files();
         self.top_up_radio();
         self.prefetch_ahead();
+        self.sleep_tick();
         if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {
             self.note = None;
             changed = true;

@@ -171,6 +171,11 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub sleep_end: &'static str,
+    pub sleep_done: &'static str,
+    pub sleep_off: &'static str,
+    pub sleep_in: &'static str,
+    pub sleep_eos: &'static str,
 }
 
 pub static ES: Strings = Strings {
@@ -259,6 +264,7 @@ pub static ES: Strings = Strings {
         ("z", "a la cola, detrás de la actual"),
         ("R", "radio de la canción"),
         ("L", "me gusta"),
+        ("t", "temporizador: al acabar esta / 15…90 min"),
         ("P", "añadir a una playlist"),
         ("y", "letra"),
         ("c", "portada"),
@@ -345,6 +351,11 @@ pub static ES: Strings = Strings {
     sp_liked: "Canciones que te gustan",
     sp_not_found: "no está en YouTube Music: {}",
     sp_matching: "buscando en YouTube Music: {}",
+    sleep_eos: "me paro al acabar esta",
+    sleep_in: "me paro en {} min",
+    sleep_off: "temporizador apagado",
+    sleep_done: "buenas noches",
+    sleep_end: "fin",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -434,6 +445,7 @@ pub static EN: Strings = Strings {
         ("z", "queue, right after the current one"),
         ("R", "song radio"),
         ("L", "like"),
+        ("t", "sleep timer: end of song / 15…90 min"),
         ("P", "add to a playlist"),
         ("y", "lyrics"),
         ("c", "cover art"),
@@ -520,5 +532,10 @@ pub static EN: Strings = Strings {
     sp_liked: "Liked Songs",
     sp_not_found: "not on YouTube Music: {}",
     sp_matching: "matching on YouTube Music: {}",
+    sleep_eos: "stopping after this song",
+    sleep_in: "stopping in {} min",
+    sleep_off: "sleep timer off",
+    sleep_done: "good night",
+    sleep_end: "end",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };
