@@ -97,12 +97,23 @@ impl Mpv {
         let _ = writeln!(self.sock, "{}", json!({ "command": args }));
     }
 
-    pub fn load(&mut self, video_id: &str, start: Option<f64>) {
-        let url = format!("https://music.youtube.com/watch?v={video_id}");
-        match start {
-            // loadfile url flags index options (mpv ≥ 0.38)
-            Some(t) if t > 1.0 => self.cmd(json!(["loadfile", url, "replace", -1, format!("start={t:.0}")])),
-            _ => self.cmd(json!(["loadfile", url, "replace"])),
+    /// `direct`: el enlace del audio ya resuelto con yt-dlp (arranca al momento);
+    /// sin él, mpv lo resuelve con su hook de yt-dlp (un par de segundos).
+    pub fn load(&mut self, video_id: &str, direct: Option<&str>, title: &str, start: Option<f64>) {
+        let page = format!("https://music.youtube.com/watch?v={video_id}");
+        let mut opts = Vec::new();
+        if let Some(t) = start.filter(|&t| t > 1.0) {
+            opts.push(format!("start={t:.0}"));
+        }
+        if direct.is_some() {
+            // el enlace directo no trae título; %n% escapa comas en la lista
+            opts.push(format!("force-media-title=%{}%{title}", title.len()));
+        }
+        let url = direct.unwrap_or(&page);
+        // loadfile url flags index options (mpv ≥ 0.38)
+        match opts.is_empty() {
+            true => self.cmd(json!(["loadfile", url, "replace"])),
+            false => self.cmd(json!(["loadfile", url, "replace", -1, opts.join(",")])),
         }
         self.cmd(json!(["set_property", "pause", false]));
     }

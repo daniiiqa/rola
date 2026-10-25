@@ -4,6 +4,7 @@
 //! (mismo formato que un theme de kitty). Los que salen de un archivo se
 //! recargan solos al cambiar.
 
+use crate::config::{Config, Tint};
 use ratatui::style::Color;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use std::time::SystemTime;
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub bg: Color, // Reset: el fondo de la terminal
+    pub base: Color, // el fondo del tema aunque se use el de la terminal (texto sobre el color principal)
     pub primary: Color,
     pub accent: Color,
     pub fg: Color,
@@ -24,6 +26,7 @@ impl Default for Theme {
     fn default() -> Self {
         Theme {
             bg: Color::Reset,
+            base: Color::Black,
             primary: Color::Blue,
             accent: Color::Yellow,
             fg: Color::Reset,
@@ -99,10 +102,11 @@ fn kitty_theme() -> PathBuf {
 }
 
 /// El archivo del que sale el tema, si sale de uno (para recargarlo al cambiar).
-pub fn source(name: &str, wallust: &Path) -> Option<PathBuf> {
+pub fn source(c: &Config) -> Option<PathBuf> {
+    let name = c.theme.as_str();
     match name {
         "kitty" => Some(kitty_theme()),
-        "wallust" => Some(wallust.to_path_buf()),
+        "wallust" => Some(c.wallust.clone()),
         "terminal" => None,
         _ if PRESETS.iter().any(|p| p.0 == name) => None,
         _ => Some(custom_dir().join(format!("{name}.conf"))),
@@ -128,10 +132,19 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Color {
     Color::Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
-fn build(bg: Rgb, fg: Rgb, primary: Rgb, accent: Rgb, transparent: bool) -> Theme {
+fn build(bg: Rgb, fg: Rgb, primary: Rgb, accent: Rgb, c: &Config) -> Theme {
     let rgb = |(r, g, b): Rgb| Color::Rgb(r, g, b);
+    let transparent = c.transparent;
+    let (fg, primary) = match c.tint {
+        Tint::Color => (fg, primary),
+        // como un monitor de fósforo: el texto también en el color principal
+        Tint::Phosphor => (primary, primary),
+        // papel y tinta: grises, el acento solo para avisos
+        Tint::Ink => (fg, fg),
+    };
     Theme {
         bg: if transparent { Color::Reset } else { rgb(bg) },
+        base: rgb(bg),
         primary: rgb(primary),
         accent: rgb(accent),
         fg: rgb(fg),
@@ -143,7 +156,7 @@ fn build(bg: Rgb, fg: Rgb, primary: Rgb, accent: Rgb, transparent: bool) -> Them
 
 /// Theme de kitty: `background`, `foreground`, `color0`…`color15`; acepta
 /// además `primary` y `accent` para elegirlos a mano.
-fn from_file(file: &Path, transparent: bool) -> Option<Theme> {
+fn from_file(file: &Path, cfg: &Config) -> Option<Theme> {
     let text = std::fs::read_to_string(file).ok()?;
     let c: HashMap<&str, Rgb> = text
         .lines()
@@ -155,15 +168,23 @@ fn from_file(file: &Path, transparent: bool) -> Option<Theme> {
     let (&bg, &fg) = (c.get("background")?, c.get("foreground")?);
     let get = |ks: &[&str], d: Rgb| ks.iter().find_map(|k| c.get(k).copied()).unwrap_or(d);
     let primary = get(&["primary", "color12"], fg);
-    Some(build(bg, fg, primary, get(&["accent", "color11"], primary), transparent))
+    Some(build(bg, fg, primary, get(&["accent", "color11"], primary), cfg))
 }
 
-pub fn load(name: &str, transparent: bool, wallust: &Path) -> Theme {
-    if let Some(&(_, [bg, fg, p, a])) = PRESETS.iter().find(|p| p.0 == name) {
-        return build(split(bg), split(fg), split(p), split(a), transparent);
+pub fn load(c: &Config) -> Theme {
+    if let Some(&(_, [bg, fg, p, a])) = PRESETS.iter().find(|p| p.0 == c.theme) {
+        return build(split(bg), split(fg), split(p), split(a), c);
     }
-    match source(name, wallust) {
-        Some(file) => from_file(&file, transparent).unwrap_or_default(),
-        None => Theme::default(),
-    }
+    let t = match source(c) {
+        Some(file) => from_file(&file, c),
+        None => None,
+    };
+    t.unwrap_or_else(|| {
+        let d = Theme::default();
+        match c.tint {
+            Tint::Color => d,
+            Tint::Phosphor => Theme { fg: d.primary, ..d },
+            Tint::Ink => Theme { primary: d.fg, ..d },
+        }
+    })
 }

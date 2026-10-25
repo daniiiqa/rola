@@ -1,10 +1,10 @@
 use crate::api::Kind;
+use crate::config::Select;
 use crate::i18n::fill;
 use crate::settings::{self, SECTIONS};
 use crate::{App, Focus, Lyrics, Popup, Repeat, Side};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::symbols;
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
@@ -47,10 +47,23 @@ impl App {
 
     fn block(&self, focused: bool) -> Block<'static> {
         let c = if focused { self.theme.primary } else { self.theme.border };
-        let b = Block::bordered().border_style(Style::new().fg(c));
-        match self.cfg.borders.border_type(self.rounded) {
-            Some(t) => b.border_type(t),
-            None => b.border_set(symbols::border::EMPTY),
+        Block::bordered().border_style(Style::new().fg(c)).border_set(self.cfg.borders.set(self.rounded))
+    }
+
+    /// Un rótulo de la interfaz en mayúsculas/minúsculas según el look.
+    fn tx(&self, s: &str) -> String {
+        self.cfg.case.apply(s)
+    }
+
+    /// Cómo se marca la fila elegida: estilo y símbolo a su izquierda.
+    fn sel(&self, focused: bool) -> (Style, &'static str) {
+        let t = self.theme;
+        match (self.cfg.select, focused) {
+            (Select::Fill, true) => (Style::new().bg(t.hl).fg(t.fg).bold(), ""),
+            (Select::Bar, true) => (Style::new().fg(t.primary).bold(), "▌"),
+            (Select::Bar, false) => (Style::new().fg(t.primary), "▌"),
+            (Select::Inverse, true) => (Style::new().bg(t.primary).fg(t.base).bold(), ""),
+            (_, false) => (Style::new().bg(t.border), ""),
         }
     }
 
@@ -119,19 +132,19 @@ impl App {
         let muted = Style::new().fg(t.muted).italic();
         let mut block = self
             .block(self.focus == Focus::Lyrics)
-            .title(Line::styled(format!(" {} ", s.lyrics), Style::new().fg(t.primary).bold()))
+            .title(Line::styled(format!(" {} ", self.tx(s.lyrics)), Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
         let lines: Vec<Line> = match &self.lyrics {
-            _ if self.current().is_none() => vec![Line::styled(s.nothing_playing, muted)],
+            _ if self.current().is_none() => vec![Line::styled(self.tx(s.nothing_playing), muted)],
             Some((_, Lyrics::Text(text, source))) => {
                 if !source.is_empty() {
                     block = block.title_bottom(Line::styled(format!(" {source} "), Style::new().fg(t.muted)).right_aligned());
                 }
                 text.lines().map(|l| Line::styled(l.to_string(), Style::new().fg(t.fg))).collect()
             }
-            Some((_, Lyrics::Missing)) => vec![Line::styled(s.no_lyrics, muted)],
+            Some((_, Lyrics::Missing)) => vec![Line::styled(self.tx(s.no_lyrics), muted)],
             Some((_, Lyrics::Err(e))) => vec![Line::styled(fill(s.load_failed, &[e]), Style::new().fg(t.accent))],
-            Some((_, Lyrics::Loading)) | None => vec![Line::styled(s.loading, muted)],
+            Some((_, Lyrics::Loading)) | None => vec![Line::styled(self.tx(s.loading), muted)],
         };
         let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((self.lyrics_scroll, 0));
         f.render_widget(p.block(block), area);
@@ -145,7 +158,7 @@ impl App {
             .map(|(k, d)| {
                 Line::from(vec![
                     Span::styled(format!("{k:>kw$}  "), Style::new().fg(t.primary).bold()),
-                    Span::styled(*d, Style::new().fg(t.fg)),
+                    Span::styled(self.tx(d), Style::new().fg(t.fg)),
                 ])
             })
             .collect();
@@ -153,7 +166,7 @@ impl App {
         let area = self.popup_area(f, w, help.len() as u16 + 2);
         let block = self
             .block(true)
-            .title(Line::styled(format!(" {} ", self.s().keys_title), Style::new().fg(t.primary).bold()))
+            .title(Line::styled(format!(" {} ", self.tx(self.s().keys_title)), Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
@@ -169,12 +182,13 @@ impl App {
             if n > 0 {
                 lines.push(Line::raw(""));
             }
-            lines.push(Line::styled(title(s), Style::new().fg(t.primary).bold()));
+            lines.push(Line::styled(self.tx(title(s)), Style::new().fg(t.primary).bold()));
             for &k in keys.iter() {
                 let on = i == sel;
                 let value = self.setting_value(k);
+                // la fila elegida toma los colores de la marca de selección
                 let mut right = vec![if on {
-                    Span::styled(format!("‹ {value} ›"), Style::new().fg(t.primary).bold())
+                    Span::raw(format!("‹ {value} ›"))
                 } else {
                     Span::styled(format!("  {value}  "), Style::new().fg(t.fg))
                 }];
@@ -186,17 +200,19 @@ impl App {
                         }
                     }
                 }
-                let left = Span::styled(
-                    format!("{} {}", if on { "▌" } else { " " }, k.label(s)),
-                    if on { Style::new().fg(t.fg).bold() } else { Style::new().fg(t.muted) },
-                );
-                let used = left.width() + right.iter().map(Span::width).sum::<usize>();
-                let mut spans = vec![left, Span::raw(" ".repeat(inner_w.saturating_sub(used)))];
+                let label = format!("{} {}", if on { "▌" } else { " " }, self.tx(k.label(s)));
+                let left = if on { Span::raw(label) } else { Span::styled(label, Style::new().fg(t.muted)) };
+                let mut spans = vec![left];
+                if k.key().is_some_and(|k| self.cfg.in_look(k)) {
+                    spans.push(Span::styled(format!(" {}", self.tx(s.from_look)), Style::new().fg(t.muted).italic()));
+                }
+                let used = spans.iter().chain(&right).map(Span::width).sum::<usize>();
+                spans.push(Span::raw(" ".repeat(inner_w.saturating_sub(used))));
                 spans.extend(right);
                 let line = Line::from(spans);
                 if on {
                     sel_line = lines.len();
-                    lines.push(line.style(Style::new().bg(t.hl)));
+                    lines.push(line.style(self.sel(true).0));
                 } else {
                     lines.push(line);
                 }
@@ -208,8 +224,8 @@ impl App {
         let scroll = (sel_line + 1).saturating_sub(h.saturating_sub(2) as usize) as u16;
         let block = self
             .block(true)
-            .title(Line::styled(format!(" {} ", s.settings), Style::new().fg(t.primary).bold()))
-            .title_bottom(Line::styled(format!(" {} ", s.custom_themes), Style::new().fg(t.muted)).right_aligned())
+            .title(Line::styled(format!(" {} ", self.tx(s.settings)), Style::new().fg(t.primary).bold()))
+            .title_bottom(Line::styled(format!(" {} ", self.tx(s.custom_themes)), Style::new().fg(t.muted)).right_aligned())
             .padding(ratatui::widgets::Padding::horizontal(1));
         f.render_widget(Paragraph::new(lines).scroll((scroll, 0)).block(block), area);
     }
@@ -218,7 +234,7 @@ impl App {
         let t = self.theme;
         let pls = self.own_playlists();
         let Some(Popup::AddTo { item, .. }) = &self.popup else { return };
-        let title = format!(" {} ", fill(self.s().add_to, &[&item.title]));
+        let title = format!(" {} ", self.tx(&fill(self.s().add_to, &[&item.title])));
         let w = pls.iter().map(|p| p.title.chars().count()).max().unwrap_or(0).max(title.chars().count()) as u16 + 6;
         let h = (pls.len() as u16 + 2).min(f.area().height.saturating_sub(4));
         let area = self.popup_area(f, w.min(f.area().width.saturating_sub(4)), h);
@@ -228,7 +244,8 @@ impl App {
             .block(true)
             .title(Line::styled(title, Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
-        let list = List::new(items).block(block).highlight_style(Style::new().bg(t.hl).add_modifier(Modifier::BOLD));
+        let (hl, mark) = self.sel(true);
+        let list = List::new(items).block(block).highlight_style(hl).highlight_symbol(mark);
         if let Some(Popup::AddTo { state, .. }) = &mut self.popup {
             f.render_stateful_widget(list, area, state);
         }
@@ -240,7 +257,7 @@ impl App {
         let block = self.block(focused).padding(ratatui::widgets::Padding::horizontal(1));
         let inner = block.inner(area);
         let text = if self.input.is_empty() && !focused {
-            Line::styled(self.s().search_placeholder, Style::new().fg(t.muted).italic())
+            Line::styled(self.tx(self.s().search_placeholder), Style::new().fg(t.muted).italic())
         } else {
             Line::styled(self.input.as_str(), Style::new().fg(t.fg))
         };
@@ -256,13 +273,17 @@ impl App {
     fn draw_side(&mut self, f: &mut Frame, area: Rect) {
         let t = self.theme;
         let focused = self.focus == Focus::Side;
-        let sep = "─".repeat(area.width.saturating_sub(4) as usize);
+        let line = match self.cfg.borders.set(self.rounded).horizontal_top {
+            " " => "─",
+            h => h,
+        };
+        let sep = line.repeat(area.width.saturating_sub(4) as usize);
         let items: Vec<ListItem> = self
             .side
             .iter()
             .map(|(label, id)| match id {
                 Side::Sep => ListItem::new(Line::styled(sep.clone(), Style::new().fg(t.border))),
-                Side::Hint => ListItem::new(Line::styled(label.clone(), Style::new().fg(t.muted).italic())),
+                Side::Hint => ListItem::new(Line::styled(self.tx(label), Style::new().fg(t.muted).italic())),
                 _ => {
                     let icon = match id {
                         Side::Home => self.ic("\u{f02dc}  ", ""),
@@ -273,18 +294,19 @@ impl App {
                         Side::Queue => self.ic("\u{f0cb8}  ", ""),
                         _ => "",
                     };
-                    ListItem::new(Line::styled(format!("{icon}{label}"), Style::new().fg(t.fg)))
+                    ListItem::new(Line::styled(format!("{icon}{}", self.tx(label)), Style::new().fg(t.fg)))
                 }
             })
             .collect();
-        let hl = if focused {
-            Style::new().bg(t.hl).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(t.primary)
+        let (hl, mark) = match self.sel(focused) {
+            // sin foco, solo se ve en color cuál es
+            (_, "") if !focused => (Style::new().fg(t.primary), ""),
+            x => x,
         };
         let list = List::new(items)
             .block(self.block(focused).padding(ratatui::widgets::Padding::horizontal(1)))
-            .highlight_style(hl);
+            .highlight_style(hl)
+            .highlight_symbol(mark);
         f.render_stateful_widget(list, area, &mut self.side_state);
     }
 
@@ -293,7 +315,7 @@ impl App {
         let focused = self.focus == Focus::Main;
         let n = self.items().len();
         let mut title = vec![Span::raw(" ")];
-        let crumbs: Vec<&str> = self.views.iter().rev().take(3).rev().map(|v| v.title.as_str()).collect();
+        let crumbs: Vec<String> = self.views.iter().rev().take(3).rev().map(|v| self.tx(&v.title)).collect();
         title.push(Span::styled(crumbs.join("  ›  "), Style::new().fg(t.primary).bold()));
         if !self.views.is_empty() {
             title.push(Span::styled(format!("  ·  {n}"), Style::new().fg(t.muted)));
@@ -306,7 +328,7 @@ impl App {
 
         if n == 0 {
             let msg = if self.loading.is_some() { self.s().loading } else { self.s().empty };
-            let p = Paragraph::new(Line::styled(msg, Style::new().fg(t.muted).italic())).block(block);
+            let p = Paragraph::new(Line::styled(self.tx(msg), Style::new().fg(t.muted).italic())).block(block);
             return f.render_widget(p, area);
         }
 
@@ -351,7 +373,7 @@ impl App {
             })
             .collect();
         let s = self.s();
-        let header = Row::new(["", s.col_title, s.col_artist, s.col_album, ""]).style(muted);
+        let header = Row::new(["", s.col_title, s.col_artist, s.col_album, ""].map(|h| self.tx(h))).style(muted);
         let table = Table::new(
             rows,
             [
@@ -365,7 +387,8 @@ impl App {
         .header(header)
         .block(block)
         .column_spacing(1)
-        .row_highlight_style(if focused { Style::new().bg(t.hl) } else { Style::new().bg(t.border) });
+        .row_highlight_style(self.sel(focused).0)
+        .highlight_symbol(self.sel(focused).1);
         if let Some(v) = self.views.last_mut() {
             f.render_stateful_widget(table, area, &mut v.state);
         }
@@ -416,7 +439,7 @@ impl App {
                 }
                 Line::from(v)
             }
-            None => Line::styled(self.s().idle_hint, Style::new().fg(t.muted).italic()),
+            None => Line::styled(self.tx(self.s().idle_hint), Style::new().fg(t.muted).italic()),
         };
         f.render_widget(Paragraph::new(now), left);
 
@@ -460,7 +483,7 @@ impl App {
         let mut spans = vec![Span::raw(" ")];
         for (k, d) in keys {
             spans.push(Span::styled(*k, Style::new().fg(t.primary).bold()));
-            spans.push(Span::styled(format!(" {d}  "), Style::new().fg(t.muted)));
+            spans.push(Span::styled(format!(" {}  ", self.tx(d)), Style::new().fg(t.muted)));
         }
         f.render_widget(Paragraph::new(Line::from(spans)), area);
     }

@@ -9,12 +9,14 @@ mod hypr;
 mod i18n;
 mod mpv;
 mod settings;
+mod stream;
 mod theme;
 mod ui;
 
 use api::{Api, Item, Kind};
 use config::Config;
-use i18n::{fill, Strings};
+use i18n::{fill, Lang, Strings};
+use std::collections::{HashMap, HashSet};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use ratatui_image::picker::Picker;
@@ -36,6 +38,8 @@ pub enum Ev {
     Lyrics { vid: String, res: Result<Option<(String, String)>, String> },
     Cover { vid: String, img: image::DynamicImage },
     Notify(String, bool),
+    Stream { vid: String, format: &'static str, url: Option<String> },
+    Look, // Hyprland recargó su config (p. ej. al cambiar de look)
 }
 
 #[derive(Clone, PartialEq)]
@@ -105,7 +109,13 @@ struct App {
     cfg: Config,
     theme: theme::Theme,
     theme_mtime: Option<SystemTime>,
+    cfg_mtimes: [Option<SystemTime>; 2],
     rounded: bool, // Hyprland redondea las ventanas (para los bordes «como Hyprland»)
+    streams: HashMap<String, String>, // video_id → enlace directo ya resuelto
+    fetching: HashSet<String>,
+    direct: bool, // la actual se cargó con enlace directo
+    waiting: Option<(String, Option<f64>)>, // a punto de sonar, esperando su enlace (video_id, desde)
+    hover: Option<String>, // canción bajo el cursor en el último tick
     focus: Focus,
     input: String,
     side: Vec<(String, Side)>,
@@ -167,9 +177,15 @@ impl App {
             api,
             tx,
             mpv,
-            theme: theme::load(&cfg.theme, cfg.transparent, &cfg.wallust),
-            theme_mtime: theme::mtime(theme::source(&cfg.theme, &cfg.wallust).as_deref()),
+            theme: theme::load(&cfg),
+            theme_mtime: theme::mtime(theme::source(&cfg).as_deref()),
+            cfg_mtimes: config::mtimes(),
             rounded: hypr::rounding().is_none_or(|r| r > 0),
+            streams: HashMap::new(),
+            fetching: HashSet::new(),
+            direct: false,
+            waiting: None,
+            hover: None,
             cfg,
             focus: Focus::Main,
             input: String::new(),
@@ -437,7 +453,17 @@ impl App {
         self.loaded = true;
         self.pos = None;
         self.dur = None;
-        self.mpv.load(&vid, start);
+        let direct = self.streams.get(&vid).filter(|u| stream::fresh(u)).cloned();
+        self.direct = direct.is_some();
+        self.waiting = None;
+        if direct.is_none() && self.fetching.contains(&vid) {
+            // ya se está resolviendo: esperarlo sale antes que empezar de cero en mpv
+            self.mpv.cmd(json!(["stop"]));
+            self.waiting = Some((vid, start));
+        } else {
+            let title = self.queue[i].title.clone();
+            self.mpv.load(&vid, direct.as_deref(), &title, start);
+        }
         if self.lyrics_on {
             self.fetch_lyrics();
         }
@@ -529,6 +555,7 @@ impl App {
             self.mpv.cmd(json!(["stop"]));
         }
         self.loaded = false;
+        self.waiting = None;
         self.pos = None;
         self.dur = None;
     }
@@ -658,6 +685,13 @@ impl App {
                 _ => {}
             },
             Ev::End(error) => {
+                // el enlace directo pudo caducar o dar 403: otra vez, que lo resuelva mpv
+                if error && self.direct {
+                    if let (Some(q), Some(vid)) = (self.qi, self.current().and_then(|x| x.video_id.clone())) {
+                        self.streams.remove(&vid);
+                        return self.play_index(q);
+                    }
+                }
                 if error {
                     self.errors += 1;
                     let t = self.current().map(|x| x.title.clone()).unwrap_or_default();
@@ -718,6 +752,23 @@ impl App {
                 }
             }
             Ev::Notify(m, err) => self.notify(m, err),
+            Ev::Stream { vid, format, url } => {
+                self.fetching.remove(&vid);
+                let url = url.filter(|_| format == self.cfg.quality.ytdl_format());
+                if let Some((w, start)) = self.waiting.take_if(|(w, _)| *w == vid) {
+                    // si yt-dlp falló aquí, que lo intente mpv por su cuenta
+                    let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
+                    self.direct = url.is_some();
+                    self.mpv.load(&w, url.as_deref(), &title, start);
+                }
+                if let Some(url) = url {
+                    self.streams.insert(vid, url);
+                }
+            }
+            Ev::Look => {
+                self.rounded = hypr::rounding().is_none_or(|r| r > 0);
+                self.check_files();
+            }
         }
     }
 
@@ -926,22 +977,104 @@ impl App {
     }
 
     fn reload_theme(&mut self) {
-        let c = &self.cfg;
-        self.theme = theme::load(&c.theme, c.transparent, &c.wallust);
-        self.theme_mtime = theme::mtime(theme::source(&c.theme, &c.wallust).as_deref());
+        self.theme = theme::load(&self.cfg);
+        self.theme_mtime = theme::mtime(theme::source(&self.cfg).as_deref());
     }
 
-    fn tick(&mut self) {
-        let m = theme::mtime(theme::source(&self.cfg.theme, &self.cfg.wallust).as_deref());
-        if m != self.theme_mtime {
+    /// Cambia a otra config (otro look, o editada a mano) aplicando lo que haga falta.
+    fn apply_config(&mut self, new: Config) {
+        let old = self.cfg.lang;
+        if new.quality != self.cfg.quality {
+            self.mpv.cmd(json!(["set_property", "ytdl-format", new.quality.ytdl_format()]));
+            self.streams.clear();
+        }
+        self.cfg = new;
+        if self.cfg.lang != old {
+            self.retitle(old);
+        }
+        self.reload_theme();
+    }
+
+    /// Tras cambiar de idioma: barra lateral y vistas abiertas desde ella.
+    fn retitle(&mut self, old: Lang) {
+        let (old, new) = (old.s(), self.s());
+        let pairs = [
+            (old.home, new.home),
+            (old.liked, new.liked),
+            (old.history, new.history),
+            (old.albums, new.albums),
+            (old.artists, new.artists),
+            (old.queue, new.queue),
+        ];
+        for v in &mut self.views {
+            if let Some(&(_, n)) = pairs.iter().find(|(o, _)| v.title == *o) {
+                v.title = n.into();
+            }
+        }
+        let p = self.playlists.clone();
+        self.fill_side(&p);
+    }
+
+    /// Recarga config y tema si sus archivos cambiaron; true si algo cambió.
+    fn check_files(&mut self) -> bool {
+        let mut changed = false;
+        let m = config::mtimes();
+        // con los ajustes abiertos manda lo que se está editando
+        if m != self.cfg_mtimes && !matches!(self.popup, Some(Popup::Settings { .. })) {
+            self.cfg_mtimes = m;
+            self.apply_config(Config::load());
+            changed = true;
+        }
+        if theme::mtime(theme::source(&self.cfg).as_deref()) != self.theme_mtime {
             self.reload_theme();
+            changed = true;
         }
-        if self.cfg.borders == config::Borders::Auto {
-            self.rounded = hypr::rounding().is_none_or(|r| r > 0);
+        changed
+    }
+
+    // ── enlaces directos por adelantado ──
+    fn prefetch(&mut self, vid: String) {
+        if self.streams.get(&vid).is_some_and(|u| stream::fresh(u)) || !self.fetching.insert(vid.clone()) {
+            return;
         }
+        let (tx, format) = (self.tx.clone(), self.cfg.quality.ytdl_format());
+        std::thread::spawn(move || {
+            let url = stream::resolve(&vid, format);
+            let _ = tx.send(Ev::Stream { vid, format, url });
+        });
+    }
+
+    /// La siguiente de la cola (o la restaurada, si aún no suena) y la canción
+    /// en la que se para el cursor, que es la que seguramente vas a poner.
+    fn prefetch_ahead(&mut self) {
+        let n = self.queue.len();
+        let next = match self.qi {
+            Some(q) if !self.loaded => Some(q),
+            Some(q) if self.repeat == Repeat::One => Some(q),
+            Some(q) if q + 1 < n => Some(q + 1),
+            Some(_) if self.repeat == Repeat::All => Some(0),
+            _ => None,
+        };
+        if let Some(vid) = next.and_then(|i| self.queue.get(i)).and_then(|x| x.video_id.clone()) {
+            self.prefetch(vid);
+        }
+        let sel = if self.focus == Focus::Main { self.selected() } else { None };
+        let sel = sel.filter(|(_, it)| it.playable()).and_then(|(_, it)| it.video_id);
+        if sel.is_some() && sel == self.hover && self.fetching.len() < 3 {
+            self.prefetch(sel.clone().unwrap_or_default());
+        }
+        self.hover = sel;
+    }
+
+    /// Cada medio segundo; true si hay que redibujar.
+    fn tick(&mut self) -> bool {
+        let mut changed = self.check_files();
+        self.prefetch_ahead();
         if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {
             self.note = None;
+            changed = true;
         }
+        changed
     }
 }
 
@@ -970,10 +1103,9 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         if app.quit {
             break Ok(());
         }
-        if last_tick.elapsed() > Duration::from_secs(2) {
-            app.tick();
+        if last_tick.elapsed() >= Duration::from_millis(500) {
+            urgent |= app.tick();
             last_tick = Instant::now();
-            urgent = true;
         }
         // time-pos llega muchas veces por segundo; la barra no necesita tanto
         if urgent || last_draw.elapsed() >= Duration::from_millis(250) {
@@ -1033,6 +1165,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    hypr::listen(tx.clone());
     std::thread::spawn(move || loop {
         let ev = match event::read() {
             Ok(Event::Key(k)) => Ev::Key(k),

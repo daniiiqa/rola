@@ -27,8 +27,10 @@ en las demás con medios bloques.
 - **General**: idioma (español / English), recuperar la sesión al abrir,
   duración de los avisos.
 - **Apariencia**: tema, fondo (el de la terminal o el del tema), bordes
-  (como Hyprland, redondeados, rectos, dobles, gruesos, sin bordes), estilo de la barra de
-  progreso, iconos Nerd Font o en texto, ancho de la barra lateral y de la
+  (como Hyprland, redondeados, rectos, dobles, gruesos, punteados, sin bordes),
+  estilo de la barra de progreso, iconos Nerd Font o en texto, rótulos en
+  mayúsculas o minúsculas, cómo se marca la fila elegida (relleno, barra al
+  lado, invertida), color (normal, fósforo, tinta), ancho de la barra lateral y de la
   letra, atajos al pie, portada.
 - **Reproducción**: calidad del audio (la mejor, ≤128k, baja), paso del
   volumen, salto de `<`/`>`, autoplay.
@@ -45,8 +47,25 @@ con el formato de un theme de kitty (`background`, `foreground`, `color0`…
 `color12` y `color11`. Todos los que salen de un archivo se recargan solos.
 
 Los bordes «como Hyprland» le preguntan a Hyprland su `decoration:rounding`
-(por su socket, cada par de segundos): esquinas rectas con 0, redondeadas si
-no. Fuera de Hyprland quedan redondeados.
+por su socket: esquinas rectas con 0, redondeadas si no. Fuera de Hyprland
+quedan redondeados.
+
+### Looks
+
+`~/.config/ytm/look.json`, si existe, pisa las claves que traiga del config
+(p. ej. `{"borders": "thick", "case": "upper", "select": "bar"}`). Pensado
+para un selector de looks que copie archivos a `~/.config`: cada look trae su
+`ytm/look.json` y ytm lo aplica al momento (mira el archivo y escucha cuando
+Hyprland recarga su config). Lo que cambies en los ajustes sobre una de esas
+claves se guarda en `look.json` (marcado «del look» en el menú), así vuelve
+con ese look.
+
+## Arranque rápido de canciones
+
+Pedirle a mpv que resuelva la canción con yt-dlp tarda ~3 s; con el enlace
+directo, ~0.2 s. Así que ytm resuelve por adelantado la siguiente de la cola
+(y la canción en la que dejas el cursor) y le pasa a mpv el enlace ya hecho.
+Si un enlace caduca o falla, vuelve al camino normal solo.
 
 ## Teclas
 

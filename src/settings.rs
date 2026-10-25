@@ -16,6 +16,9 @@ pub enum Setting {
     Borders,
     Bar,
     Icons,
+    Case,
+    Select,
+    Tint,
     Side,
     Lyrics,
     Footer,
@@ -40,6 +43,9 @@ pub const SECTIONS: &[Section] = &[
             Setting::Borders,
             Setting::Bar,
             Setting::Icons,
+            Setting::Case,
+            Setting::Select,
+            Setting::Tint,
             Setting::Side,
             Setting::Lyrics,
             Setting::Footer,
@@ -64,6 +70,9 @@ impl Setting {
             Setting::Borders => s.set_borders,
             Setting::Bar => s.set_bar,
             Setting::Icons => s.set_icons,
+            Setting::Case => s.set_case,
+            Setting::Select => s.set_select,
+            Setting::Tint => s.set_tint,
             Setting::Side => s.set_side,
             Setting::Lyrics => s.set_lyrics,
             Setting::Footer => s.set_footer,
@@ -73,6 +82,30 @@ impl Setting {
             Setting::Seek => s.set_seek,
             Setting::Autoplay => s.set_autoplay,
         }
+    }
+
+    /// Su clave en config.json / look.json (portada y autoplay van con la sesión).
+    pub fn key(self) -> Option<&'static str> {
+        Some(match self {
+            Setting::Lang => "lang",
+            Setting::Restore => "restore",
+            Setting::Notify => "notify_secs",
+            Setting::Theme => "theme",
+            Setting::Background => "transparent",
+            Setting::Borders => "borders",
+            Setting::Bar => "bar",
+            Setting::Icons => "icons",
+            Setting::Case => "case",
+            Setting::Select => "select",
+            Setting::Tint => "tint",
+            Setting::Side => "side_width",
+            Setting::Lyrics => "lyrics_width",
+            Setting::Footer => "footer",
+            Setting::Quality => "quality",
+            Setting::VolStep => "vol_step",
+            Setting::Seek => "seek",
+            Setting::Cover | Setting::Autoplay => return None,
+        })
     }
 }
 
@@ -97,6 +130,9 @@ impl App {
             Setting::Borders => s.borders[idx(c.borders)].into(),
             Setting::Bar => s.bars[idx(c.bar)].into(),
             Setting::Icons => if c.icons { s.icons_nerd } else { s.icons_plain }.into(),
+            Setting::Case => s.cases[idx(c.case)].into(),
+            Setting::Select => s.selects[idx(c.select)].into(),
+            Setting::Tint => s.tints[idx(c.tint)].into(),
             Setting::Side => c.side_width.to_string(),
             Setting::Lyrics => format!("{}%", c.lyrics_width),
             Setting::Footer => yn(c.footer),
@@ -112,25 +148,9 @@ impl App {
         let c = &mut self.cfg;
         match k {
             Setting::Lang => {
-                let old = c.lang.s();
+                let old = c.lang;
                 c.lang = c.lang.step(d);
-                // las vistas ya abiertas desde la barra lateral cambian de nombre también
-                let new = c.lang.s();
-                let pairs = [
-                    (old.home, new.home),
-                    (old.liked, new.liked),
-                    (old.history, new.history),
-                    (old.albums, new.albums),
-                    (old.artists, new.artists),
-                    (old.queue, new.queue),
-                ];
-                for v in &mut self.views {
-                    if let Some(&(_, n)) = pairs.iter().find(|(o, _)| v.title == *o) {
-                        v.title = n.into();
-                    }
-                }
-                let p = self.playlists.clone();
-                self.fill_side(&p);
+                self.retitle(old);
             }
             Setting::Restore => c.restore = !c.restore,
             Setting::Notify => c.notify_secs = step_in(config::NOTIFY_SECS, c.notify_secs, d),
@@ -138,15 +158,14 @@ impl App {
                 let names = theme::names();
                 let i = names.iter().position(|n| *n == c.theme).unwrap_or(0) as isize;
                 c.theme = names[(i + d).rem_euclid(names.len() as isize) as usize].clone();
-                self.reload_theme();
             }
-            Setting::Background => {
-                c.transparent = !c.transparent;
-                self.reload_theme();
-            }
+            Setting::Background => c.transparent = !c.transparent,
             Setting::Borders => c.borders = c.borders.step(d),
             Setting::Bar => c.bar = c.bar.step(d),
             Setting::Icons => c.icons = !c.icons,
+            Setting::Case => c.case = c.case.step(d),
+            Setting::Select => c.select = c.select.step(d),
+            Setting::Tint => c.tint = c.tint.step(d),
             Setting::Side => c.side_width = step_in(config::SIDE_WIDTHS, c.side_width, d),
             Setting::Lyrics => c.lyrics_width = step_in(config::LYRICS_WIDTHS, c.lyrics_width, d),
             Setting::Footer => c.footer = !c.footer,
@@ -158,6 +177,7 @@ impl App {
                 c.quality = c.quality.step(d);
                 let f = c.quality.ytdl_format();
                 self.mpv.cmd(json!(["set_property", "ytdl-format", f]));
+                self.streams.clear();
                 if self.loaded {
                     self.notify(self.s().quality_next, false);
                 }
@@ -166,6 +186,7 @@ impl App {
             Setting::Seek => c.seek = step_in(config::SEEKS, c.seek, d),
             Setting::Autoplay => self.autoplay = !self.autoplay,
         }
+        self.reload_theme();
     }
 
     pub fn settings_key(&mut self, k: KeyEvent) {
@@ -179,6 +200,7 @@ impl App {
                     Ok(()) => self.notify(self.s().saved, false),
                     Err(e) => self.notify(e, true),
                 }
+                self.cfg_mtimes = config::mtimes();
             }
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => *sel = (cur + 1) % n,
             KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => *sel = (cur + n - 1) % n,

@@ -1,27 +1,44 @@
 //! Lo poco que se le pregunta a Hyprland, por su socket (sin lanzar hyprctl).
 
+use crate::Ev;
 use serde_json::Value;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-fn socket() -> Option<PathBuf> {
+fn socket(name: &str) -> Option<PathBuf> {
     let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
     let run = std::env::var("XDG_RUNTIME_DIR").unwrap_or_default();
     // Hyprland ≥ 0.40 lo pone en XDG_RUNTIME_DIR; antes, en /tmp
     [PathBuf::from(run).join("hypr"), PathBuf::from("/tmp/hypr")]
         .into_iter()
-        .map(|d| d.join(&sig).join(".socket.sock"))
+        .map(|d| d.join(&sig).join(name))
         .find(|p| p.exists())
 }
 
 /// El redondeo de las ventanas (`decoration:rounding`); None fuera de Hyprland.
 pub fn rounding() -> Option<i64> {
-    let mut s = UnixStream::connect(socket()?).ok()?;
+    let mut s = UnixStream::connect(socket(".socket.sock")?).ok()?;
     s.set_read_timeout(Some(Duration::from_millis(300))).ok()?;
     s.write_all(b"j/getoption decoration:rounding").ok()?;
     let mut out = String::new();
     s.read_to_string(&mut out).ok()?;
     serde_json::from_str::<Value>(&out).ok()?["int"].as_i64()
+}
+
+/// Avisa cada vez que Hyprland recarga su config: es lo último que hace
+/// LookSwitch.sh, así que para entonces el look nuevo ya está entero.
+pub fn listen(tx: Sender<Ev>) {
+    let Some(path) = socket(".socket2.sock") else { return };
+    std::thread::spawn(move || {
+        let Ok(s) = UnixStream::connect(path) else { return };
+        for line in BufReader::new(s).lines() {
+            let Ok(line) = line else { break };
+            if line.starts_with("configreloaded>>") && tx.send(Ev::Look).is_err() {
+                break;
+            }
+        }
+    });
 }
