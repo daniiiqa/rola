@@ -40,7 +40,8 @@ impl Mpv {
             // ni mpv-mpris ni otros scripts del sistema: el MPRIS lo pone rola,
             // que es quien sabe qué va después (ytdl_hook viene dentro, sigue)
             "--load-scripts=no",
-            // el cliente por defecto de yt-dlp da 403 al stremear; web_music no
+            // solo si rola no pudo resolver el enlace (ver stream.rs): web_music
+            // no da 403 nada más pedirlo, aunque sí peor calidad
             "--ytdl-raw-options-append=extractor-args=youtube:player_client=web_music",
         ])
         .arg(format!("--input-ipc-server={}", path.display()))
@@ -105,7 +106,7 @@ impl Mpv {
         let page = format!("https://music.youtube.com/watch?v={video_id}");
         let mut opts = Vec::new();
         if let Some(t) = start.filter(|&t| t > 1.0) {
-            opts.push(format!("start={t:.0}"));
+            opts.push(format!("start={t:.2}"));
         }
         if direct.is_some() {
             // el enlace directo no trae título; %n% escapa comas en la lista

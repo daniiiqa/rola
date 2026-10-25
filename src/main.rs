@@ -43,7 +43,8 @@ pub enum Ev {
     Lyrics { vid: String, res: Result<Option<(String, String)>, String> },
     Cover { vid: String, img: image::DynamicImage },
     Notify(String, bool),
-    Stream { vid: String, format: &'static str, url: Option<String> },
+    Stream { vid: String, format: &'static str, link: Option<stream::Link> },
+    Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
 }
 
@@ -117,7 +118,9 @@ struct App {
     theme_mtime: Option<SystemTime>,
     cfg_mtimes: [Option<SystemTime>; 2],
     rounded: bool, // Hyprland redondea las ventanas (para los bordes «como Hyprland»)
-    streams: HashMap<String, String>, // video_id → enlace directo ya resuelto
+    streams: HashMap<String, stream::Link>, // video_id → enlace directo ya resuelto
+    retried: Option<String>, // la que ya falló una vez con enlace directo
+    upgrade: Option<String>, // suena por mpv (peor calidad) hasta que su enlace sirva
     fetching: HashSet<String>,
     direct: bool, // la actual se cargó con enlace directo
     waiting: Option<(String, Option<f64>)>, // a punto de sonar, esperando su enlace (video_id, desde)
@@ -133,7 +136,7 @@ struct App {
     qi: Option<usize>,
     added: usize, // canciones metidas con z detrás de la actual
     loaded: bool, // mpv tiene la actual cargada (no al abrir con la cola restaurada)
-    resume: Option<(usize, f64)>, // dónde se quedó la sesión anterior
+    resume: Option<(Option<String>, f64)>, // dónde se quedó la sesión anterior (canción, segundo)
     playlists: Vec<Item>,
     lyrics_on: bool,
     lyrics: Option<(String, Lyrics)>, // video_id → letra
@@ -207,6 +210,8 @@ impl App {
             cfg_mtimes: config::mtimes(),
             rounded: hypr::rounding().is_none_or(|r| r > 0),
             streams: HashMap::new(),
+            retried: None,
+            upgrade: None,
             fetching: HashSet::new(),
             direct: false,
             waiting: None,
@@ -265,7 +270,7 @@ impl App {
         if let Some(qi) = st["qi"].as_u64().map(|i| i as usize).filter(|&i| i < app.queue.len()) {
             let pos = st["pos"].as_f64().unwrap_or(0.0);
             app.qi = Some(qi);
-            app.resume = Some((qi, pos));
+            app.resume = Some((app.queue[qi].video_id.clone(), pos));
             app.pos = Some(pos);
             app.dur = parse_duration(&app.queue[qi].duration);
             if app.lyrics_on {
@@ -302,7 +307,7 @@ impl App {
             "cover": self.cover_on,
             "queue": self.queue.iter().map(Item::to_json).collect::<Vec<_>>(),
             "qi": self.qi,
-            "pos": if self.loaded { self.pos } else { self.resume.map(|r| r.1) },
+            "pos": if self.loaded { self.pos } else { self.resume.as_ref().map(|r| r.1) },
         });
         let f = state_file();
         if let Some(d) = f.parent() {
@@ -486,7 +491,7 @@ impl App {
 
     fn play_index(&mut self, i: usize) {
         let Some(vid) = self.queue.get(i).and_then(|x| x.video_id.clone()) else { return };
-        let start = self.resume.take().filter(|r| r.0 == i).map(|r| r.1);
+        let start = self.resume.take().filter(|r| r.0 == self.queue[i].video_id).map(|r| r.1);
         self.qi = Some(i);
         self.song_start = Instant::now();
         self.track_n += 1;
@@ -495,21 +500,71 @@ impl App {
         self.loaded = true;
         self.pos = None;
         self.dur = None;
-        let direct = self.streams.get(&vid).filter(|u| stream::fresh(u)).cloned();
-        self.direct = direct.is_some();
         self.waiting = None;
-        if direct.is_none() && self.fetching.contains(&vid) {
-            // ya se está resolviendo: esperarlo sale antes que empezar de cero en mpv
-            self.mpv.cmd(json!(["stop"]));
-            self.waiting = Some((vid, start));
-        } else {
-            let title = self.queue[i].title.clone();
-            self.mpv.load(&vid, direct.as_deref(), &title, start);
+        self.upgrade = None;
+        match self.streams.get(&vid).filter(|l| l.fresh()).cloned() {
+            // lo bastante pronto: mejor esperar un momento que empezar en baja
+            Some(link) if link.wait() < Duration::from_millis(1500) => self.start_link(vid, link, start),
+            link => {
+                // en frío el enlace bueno tarda ~8 s en servir: que empiece ya por
+                // mpv (peor calidad) y se cambia al bueno en cuanto se pueda
+                self.start_fallback(&vid, start);
+                self.upgrade = Some(vid.clone());
+                match link {
+                    Some(l) => self.upgrade_when_ready(vid, &l),
+                    None => self.prefetch(vid),
+                }
+            }
         }
         if self.lyrics_on {
             self.fetch_lyrics();
         }
         self.fetch_cover();
+    }
+
+    /// Pone la actual con su enlace directo, o espera a que sirva.
+    fn start_link(&mut self, vid: String, link: stream::Link, start: Option<f64>) {
+        let wait = link.wait();
+        if wait.is_zero() {
+            let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
+            self.direct = true;
+            return self.mpv.load(&vid, Some(&link.url), &title, start);
+        }
+        self.mpv.cmd(json!(["stop"]));
+        self.waiting = Some((vid.clone(), start));
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            let _ = tx.send(Ev::Ready(vid));
+        });
+    }
+
+    fn upgrade_when_ready(&self, vid: String, link: &stream::Link) {
+        let (tx, wait) = (self.tx.clone(), link.wait());
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            let _ = tx.send(Ev::Ready(vid));
+        });
+    }
+
+    /// Pasa la actual del audio de mpv al enlace bueno, en el mismo punto.
+    fn do_upgrade(&mut self, vid: &str) {
+        let Some(link) = self.streams.get(vid).filter(|l| l.fresh()).cloned() else { return };
+        self.upgrade = None;
+        let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
+        let paused = self.paused;
+        self.direct = true;
+        self.mpv.load(vid, Some(&link.url), &title, self.pos);
+        if paused {
+            self.mpv.cmd(json!(["set_property", "pause", true]));
+        }
+    }
+
+    /// Sin enlace propio: que lo resuelva mpv (peor calidad, pero suena).
+    fn start_fallback(&mut self, vid: &str, start: Option<f64>) {
+        let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
+        self.direct = false;
+        self.mpv.load(vid, None, &title, start);
     }
 
     // ── portada ──
@@ -762,11 +817,29 @@ impl App {
                 _ => {}
             },
             Ev::End(error) => {
-                // el enlace directo pudo caducar o dar 403: otra vez, que lo resuelva mpv
+                // el enlace directo pudo caducar o dar 403: uno nuevo y, si
+                // vuelve a fallar, que lo resuelva mpv
+                // lo de mpv falló pero el enlace bueno viene de camino: esperarlo
+                if error && !self.direct {
+                    if let Some(vid) = self.upgrade.take().filter(|v| self.current().and_then(|x| x.video_id.as_ref()) == Some(v)) {
+                        let start = self.pos;
+                        return match self.streams.get(&vid).cloned() {
+                            Some(l) => self.start_link(vid, l, start),
+                            None => {
+                                self.waiting = Some((vid.clone(), start));
+                                self.prefetch(vid);
+                            }
+                        };
+                    }
+                }
                 if error && self.direct {
                     if let (Some(q), Some(vid)) = (self.qi, self.current().and_then(|x| x.video_id.clone())) {
                         self.streams.remove(&vid);
-                        return self.play_index(q);
+                        if self.retried.as_ref() != Some(&vid) {
+                            self.retried = Some(vid);
+                            return self.play_index(q);
+                        }
+                        return self.start_fallback(&vid, None);
                     }
                 }
                 if error {
@@ -835,17 +908,29 @@ impl App {
                 }
             }
             Ev::Notify(m, err) => self.notify(m, err),
-            Ev::Stream { vid, format, url } => {
+            Ev::Stream { vid, format, link } => {
                 self.fetching.remove(&vid);
-                let url = url.filter(|_| format == self.cfg.quality.ytdl_format());
-                if let Some((w, start)) = self.waiting.take_if(|(w, _)| *w == vid) {
-                    // si yt-dlp falló aquí, que lo intente mpv por su cuenta
-                    let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
-                    self.direct = url.is_some();
-                    self.mpv.load(&w, url.as_deref(), &title, start);
+                let link = link.filter(|_| format == self.cfg.quality.ytdl_format());
+                if let Some(l) = &link {
+                    self.streams.insert(vid.clone(), l.clone());
                 }
-                if let Some(url) = url {
-                    self.streams.insert(vid, url);
+                if let Some((w, start)) = self.waiting.take_if(|(w, _)| *w == vid) {
+                    match link {
+                        Some(l) => self.start_link(w, l, start),
+                        // yt-dlp falló aquí: que lo intente mpv por su cuenta
+                        None => self.start_fallback(&w, start),
+                    }
+                } else if let (Some(l), true) = (&link, self.upgrade.as_ref() == Some(&vid)) {
+                    self.upgrade_when_ready(vid, l);
+                }
+            }
+            Ev::Ready(vid) if self.upgrade.as_ref() == Some(&vid) => self.do_upgrade(&vid),
+            Ev::Ready(vid) => {
+                if let Some((w, start)) = self.waiting.take_if(|(w, _)| *w == vid) {
+                    match self.streams.get(&w).cloned() {
+                        Some(l) => self.start_link(w, l, start),
+                        None => self.start_fallback(&w, start),
+                    }
                 }
             }
             Ev::Look => {
@@ -1189,13 +1274,13 @@ impl App {
 
     // ── enlaces directos por adelantado ──
     fn prefetch(&mut self, vid: String) {
-        if self.streams.get(&vid).is_some_and(|u| stream::fresh(u)) || !self.fetching.insert(vid.clone()) {
+        if self.streams.get(&vid).is_some_and(|l| l.fresh()) || !self.fetching.insert(vid.clone()) {
             return;
         }
         let (tx, format) = (self.tx.clone(), self.cfg.quality.ytdl_format());
         std::thread::spawn(move || {
-            let url = stream::resolve(&vid, format);
-            let _ = tx.send(Ev::Stream { vid, format, url });
+            let link = stream::resolve(&vid, format);
+            let _ = tx.send(Ev::Stream { vid, format, link });
         });
     }
 

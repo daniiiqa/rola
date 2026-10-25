@@ -68,10 +68,12 @@ con ese look.
 
 ## Arranque rápido de canciones
 
-Pedirle a mpv que resuelva la canción con yt-dlp tarda ~3 s; con el enlace
-directo, ~0.2 s. Así que rola resuelve por adelantado la siguiente de la cola
-(y la canción en la que dejas el cursor) y le pasa a mpv el enlace ya hecho.
-Si un enlace caduca o falla, vuelve al camino normal solo.
+El audio bueno (opus ~130k) llega con un enlace que YouTube no deja usar hasta
+unos 5 s después de pedirlo. Así que rola lo pide por adelantado para la
+siguiente de la cola y para la canción en la que dejas el cursor: cuando toca,
+suena en ~0.1 s. Si pones una en frío, empieza a los ~3 s con el audio de
+reserva de mpv (aac ~96k) y a los ~7 s pasa sola al bueno, en el mismo punto.
+Si un enlace caduca o falla, pide otro y, si no, sigue con el de mpv.
 
 ## Radio
 
