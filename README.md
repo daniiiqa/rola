@@ -78,6 +78,15 @@ canción y detrás su radio. En álbumes y playlists suena la lista en orden y,
 con autoplay, al final sigue la radio de la última. Cuando quedan un par de
 canciones pide más, así que no se corta.
 
+## Ratón
+
+Clic en la barra lateral abre; en una canción la elige, doble clic la pone y
+clic derecho la manda a la cola. Clic (o arrastrar) en la barra de progreso
+salta; en aleatorio / repetir / autoplay los cambia; en ▶ pausa y en el título
+abre la cola. La rueda mueve lo que tengas debajo y, sobre la barra de abajo,
+el volumen. En los ajustes: clic elige, otro clic cambia (derecho, al revés).
+Para seleccionar texto, Mayús + arrastrar; o se apaga en ajustes → Ratón.
+
 ## Teclas
 
 `/` buscar · `Enter` reproducir/abrir · `espacio` pausa · `n`/`p` sig./ant. ·

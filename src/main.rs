@@ -7,6 +7,7 @@ mod api;
 mod config;
 mod hypr;
 mod i18n;
+mod mouse;
 mod mpv;
 mod settings;
 mod stream;
@@ -16,8 +17,9 @@ mod ui;
 use api::{Api, Item, Kind};
 use config::Config;
 use i18n::{fill, Lang, Strings};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::widgets::{ListState, TableState};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
@@ -29,6 +31,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 pub enum Ev {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Resize,
     Prop(String, Value),
     End(bool),
@@ -153,10 +156,19 @@ struct App {
     epoch: Instant,               // reloj de las animaciones
     song_start: Instant,          // para que el título largo empiece quieto
     splash: Option<Instant>,      // canción nueva: su nombre arriba un momento
+    hits: RefCell<mouse::Hits>,   // dónde quedó cada cosa al dibujar
+    last_click: Option<(Instant, u16, u16)>,
 }
 
 /// Lo que dura el aviso de canción nueva.
 pub const SPLASH: Duration = Duration::from_millis(3500);
+
+/// Pide (o deja de pedir) a la terminal los eventos del ratón.
+pub fn mouse_capture(on: bool) {
+    use ratatui::crossterm::{event as ev, execute};
+    let mut out = std::io::stdout();
+    let _ = if on { execute!(out, ev::EnableMouseCapture) } else { execute!(out, ev::DisableMouseCapture) };
+}
 
 fn data_dir() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
@@ -236,6 +248,8 @@ impl App {
             epoch: Instant::now(),
             song_start: Instant::now(),
             splash: None,
+            hits: RefCell::default(),
+            last_click: None,
         };
         app.fill_side(&[]);
         if !app.cfg.restore {
@@ -725,6 +739,7 @@ impl App {
     fn handle(&mut self, ev: Ev) {
         match ev {
             Ev::Key(k) => self.key(k),
+            Ev::Mouse(m) => self.mouse(m),
             Ev::Resize => {}
             Ev::Prop(name, data) => match name.as_str() {
                 // sin nada cargado mpv dice null y se perdería la posición restaurada
@@ -1174,6 +1189,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
             last_draw = Instant::now();
         }
     };
+    mouse_capture(false);
     ratatui::restore();
     app.save_state();
     res
@@ -1236,10 +1252,13 @@ fn main() {
             std::process::exit(1);
         }
     };
+    mouse_capture(app.cfg.mouse);
     hypr::listen(tx.clone());
     std::thread::spawn(move || loop {
         let ev = match event::read() {
             Ok(Event::Key(k)) => Ev::Key(k),
+            // moverlo sin más no hace nada; mandarlo solo llenaría la cola
+            Ok(Event::Mouse(m)) if m.kind != MouseEventKind::Moved => Ev::Mouse(m),
             Ok(Event::Resize(..)) => Ev::Resize,
             Ok(_) => continue,
             Err(_) => break,

@@ -156,6 +156,7 @@ pub struct Config {
     pub seek: i64,
     pub notify_secs: u64,
     pub restore: bool,
+    pub mouse: bool,
     pub wallust: PathBuf,
     /// claves que vienen de look.json (y ahí se guardan)
     pub look: Vec<String>,
@@ -197,6 +198,7 @@ impl Default for Config {
             seek: 5,
             notify_secs: 4,
             restore: true,
+            mouse: true,
             wallust: PathBuf::from(home).join(".config/kitty/kitty-themes/01-Wallust.conf"),
             look: Vec::new(),
             base: Map::new(),
@@ -253,6 +255,7 @@ impl Config {
             seek: num("seek", d.seek as u64, 1, 300) as i64,
             notify_secs: num("notify_secs", d.notify_secs, 1, 60),
             restore: v["restore"].as_bool().unwrap_or(d.restore),
+            mouse: v["mouse"].as_bool().unwrap_or(d.mouse),
             wallust: v["wallust"].as_str().map(PathBuf::from).unwrap_or(d.wallust),
             look: over.keys().map(|k| if k == "icons" { "labels".into() } else { k.clone() }).collect(),
             base,
@@ -283,6 +286,7 @@ impl Config {
             "seek": self.seek,
             "notify_secs": self.notify_secs,
             "restore": self.restore,
+            "mouse": self.mouse,
             "wallust": self.wallust,
         });
         let (mut base, mut look) = (Map::new(), Map::new());

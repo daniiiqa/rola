@@ -1,6 +1,7 @@
 use crate::api::Kind;
 use crate::config::{Bar, Labels, Select, Tint};
 use crate::i18n::fill;
+use crate::mouse::{Button, Hits};
 use crate::settings::{self, SECTIONS};
 use crate::{App, Focus, Lyrics, Popup, Repeat, Side, SPLASH};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -176,6 +177,7 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
+        *self.hits.borrow_mut() = Hits::default();
         if self.theme.bg != Color::Reset {
             f.render_widget(Block::new().style(Style::new().bg(self.theme.bg).fg(self.theme.fg)), f.area());
         }
@@ -254,6 +256,7 @@ impl App {
             Some((_, Lyrics::Err(e))) => vec![Line::styled(fill(s.load_failed, &[e]), Style::new().fg(t.accent))],
             Some((_, Lyrics::Loading)) | None => vec![Line::styled(self.tx(s.loading), muted)],
         };
+        self.hits.borrow_mut().lyrics = area;
         let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((self.lyrics_scroll, 0));
         f.render_widget(p.block(block), area);
     }
@@ -272,6 +275,7 @@ impl App {
             .collect();
         let w = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
         let area = self.popup_area(f, w, help.len() as u16 + 2);
+        self.hits.borrow_mut().popup = area;
         let block = self
             .block(true)
             .title(Line::styled(format!(" {} ", self.tx(self.s().keys_title)), Style::new().fg(t.primary).bold()))
@@ -286,6 +290,7 @@ impl App {
         let mut lines: Vec<Line> = Vec::new();
         let mut sel_line = 0;
         let mut i = 0;
+        let mut at = Vec::new(); // línea de cada ajuste
         for (n, (title, keys)) in SECTIONS.iter().enumerate() {
             if n > 0 {
                 lines.push(Line::raw(""));
@@ -318,6 +323,7 @@ impl App {
                 spans.push(Span::raw(" ".repeat(inner_w.saturating_sub(used))));
                 spans.extend(right);
                 let line = Line::from(spans);
+                at.push((lines.len(), i));
                 if on {
                     sel_line = lines.len();
                     lines.push(line.style(self.sel(true).0));
@@ -330,6 +336,16 @@ impl App {
         let h = (lines.len() as u16 + 2).min(f.area().height.saturating_sub(2));
         let area = self.popup_area(f, w, h);
         let scroll = (sel_line + 1).saturating_sub(h.saturating_sub(2) as usize) as u16;
+        {
+            let mut hits = self.hits.borrow_mut();
+            hits.popup = area;
+            let (top, rows) = (area.y + 1, h.saturating_sub(2) as usize);
+            hits.popup_rows = at
+                .into_iter()
+                .filter(|&(l, _)| l >= scroll as usize && l < scroll as usize + rows)
+                .map(|(l, i)| (top + (l - scroll as usize) as u16, i))
+                .collect();
+        }
         let block = self
             .block(true)
             .title(Line::styled(format!(" {} ", self.tx(s.settings)), Style::new().fg(t.primary).bold()))
@@ -356,6 +372,10 @@ impl App {
         let list = List::new(items).block(block).highlight_style(hl).highlight_symbol(mark);
         if let Some(Popup::AddTo { state, .. }) = &mut self.popup {
             f.render_stateful_widget(list, area, state);
+            let mut hits = self.hits.borrow_mut();
+            hits.popup = area;
+            let off = state.offset();
+            hits.popup_rows = (0..h.saturating_sub(2)).map(|k| (area.y + 1 + k, off + k as usize)).filter(|&(_, i)| i < pls.len()).collect();
         }
     }
 
@@ -364,6 +384,7 @@ impl App {
         let focused = self.focus == Focus::Search;
         let block = self.block(focused).padding(ratatui::widgets::Padding::horizontal(1));
         let inner = block.inner(area);
+        self.hits.borrow_mut().search = area;
         let text = if self.input.is_empty() && !focused {
             Line::styled(self.tx(self.s().search_placeholder), Style::new().fg(t.muted).italic())
         } else {
@@ -411,8 +432,10 @@ impl App {
             (_, "") if !focused => (Style::new().fg(t.primary), ""),
             x => x,
         };
+        let block = self.block(focused).padding(ratatui::widgets::Padding::horizontal(1));
+        self.hits.borrow_mut().side = block.inner(area);
         let list = List::new(items)
-            .block(self.block(focused).padding(ratatui::widgets::Padding::horizontal(1)))
+            .block(block)
             .highlight_style(hl)
             .highlight_symbol(mark);
         f.render_stateful_widget(list, area, &mut self.side_state);
@@ -455,6 +478,9 @@ impl App {
             return self.draw_logo(f, inner, msg);
         }
 
+        let inner = block.inner(area);
+        // la primera fila es la cabecera
+        self.hits.borrow_mut().rows = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
         let queue_view = self.views.last().is_some_and(|v| v.queue);
         let cur = self.current().and_then(|x| x.video_id.clone());
         let qi = self.qi;
@@ -528,6 +554,7 @@ impl App {
         }
         let inner = block.inner(area).inner(ratatui::layout::Margin::new(1, 0));
         f.render_widget(block, area);
+        self.hits.borrow_mut().bar = area;
         let [top, prog] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
         let on = |b: bool| if b { Style::new().fg(t.primary).bold() } else { Style::new().fg(t.muted) };
@@ -547,6 +574,20 @@ impl App {
         ]);
         let [left, right] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(flags.width() as u16 + 1)]).areas(top);
+        {
+            // va alineado a la derecha: cada botón donde cae su trozo
+            let mut x = right.right().saturating_sub(flags.width() as u16);
+            let mut hits = self.hits.borrow_mut();
+            for (s, b) in flags.spans.iter().zip([Button::Shuffle, Button::Repeat, Button::Autoplay]) {
+                let w = s.width() as u16;
+                hits.buttons.push((Rect::new(x, top.y, w, 1), b));
+                x += w;
+            }
+            if self.current().is_some() {
+                hits.buttons.push((Rect::new(left.x, top.y, 2, 1), Button::Play));
+                hits.buttons.push((Rect::new(left.x + 2, top.y, left.width.saturating_sub(2), 1), Button::Title));
+            }
+        }
         f.render_widget(Paragraph::new(flags).right_aligned(), right);
 
         let it = self.current();
@@ -578,6 +619,7 @@ impl App {
             _ => 0.0,
         };
         let done = (bw as f64 * frac).round() as usize;
+        self.hits.borrow_mut().prog = Rect::new(prog.x + l.len() as u16 + 1, prog.y, bw as u16, 1);
         let (full, head, rest) = self.cfg.bar.glyphs();
         let (body, head) = if done > 0 && it.is_some() {
             (full.repeat(done - 1), head)

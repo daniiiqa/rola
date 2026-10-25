@@ -10,6 +10,7 @@ use serde_json::json;
 pub enum Setting {
     Lang,
     Restore,
+    Mouse,
     Notify,
     Theme,
     Background,
@@ -35,7 +36,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Lang, Setting::Restore, Setting::Notify]),
+    (|s| s.sec_general, &[Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify]),
     (
         |s| s.sec_look,
         &[
@@ -66,6 +67,7 @@ impl Setting {
         match self {
             Setting::Lang => s.set_lang,
             Setting::Restore => s.set_restore,
+            Setting::Mouse => s.set_mouse,
             Setting::Notify => s.set_notify,
             Setting::Theme => s.set_theme,
             Setting::Background => s.set_background,
@@ -92,6 +94,7 @@ impl Setting {
         Some(match self {
             Setting::Lang => "lang",
             Setting::Restore => "restore",
+            Setting::Mouse => "mouse",
             Setting::Notify => "notify_secs",
             Setting::Theme => "theme",
             Setting::Background => "transparent",
@@ -124,6 +127,7 @@ impl App {
         match k {
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
+            Setting::Mouse => yn(c.mouse),
             Setting::Notify => format!("{} s", c.notify_secs),
             Setting::Theme => c.theme.clone(),
             Setting::Background => if c.transparent { s.bg_terminal } else { s.bg_theme }.into(),
@@ -158,6 +162,10 @@ impl App {
                 self.retitle(old);
             }
             Setting::Restore => c.restore = !c.restore,
+            Setting::Mouse => {
+                c.mouse = !c.mouse;
+                crate::mouse_capture(c.mouse);
+            }
             Setting::Notify => c.notify_secs = step_in(config::NOTIFY_SECS, c.notify_secs, d),
             Setting::Theme => {
                 let names = theme::names();
