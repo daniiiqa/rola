@@ -319,6 +319,7 @@ impl App {
             Some(Popup::Wrapped { period, plays }) => self.draw_wrapped(f, *period, plays),
             Some(Popup::Scrobble { .. }) => self.draw_scrobble(f),
             Some(Popup::Party) => self.draw_party(f),
+            Some(Popup::Discord { .. }) => self.draw_discord(f),
             None => {}
         }
     }
@@ -936,6 +937,39 @@ impl App {
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
 
+    fn draw_discord(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::Discord { input, err }) = &self.popup else { return };
+        let mut lines: Vec<Line> = Vec::new();
+        if !self.cfg.discord.is_empty() {
+            lines.push(Line::styled(s.dc_on, Style::new().fg(t.primary)));
+            lines.push(Line::styled(self.tx(s.sp_disconnect_hint), Style::new().fg(t.muted)));
+            lines.push(Line::raw(""));
+        }
+        for (i, l) in s.dc_steps.iter().enumerate() {
+            lines.push(Line::styled(*l, Style::new().fg(if i == 0 { t.muted } else { t.fg })));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled("Application ID: ", Style::new().fg(t.primary).bold()),
+            Span::styled(input.clone(), Style::new().fg(t.fg)),
+            Span::styled("▏", Style::new().fg(t.primary)),
+        ]));
+        if let Some(e) = err {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(e.clone(), Style::new().fg(t.accent)));
+        }
+        let w = 84.min(f.area().width.saturating_sub(4));
+        let h: u16 = lines.iter().map(|l| (l.width() as u16).div_ceil(w.saturating_sub(4).max(1)).max(1)).sum();
+        let area = self.popup_area(f, w, h + 2);
+        self.hits.borrow_mut().popup = area;
+        let block = self
+            .block(true)
+            .title(Line::styled(" Discord ", Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+    }
+
     fn draw_scrobble(&self, f: &mut Frame) {
         let (t, s) = (self.theme, self.s());
         let Some(Popup::Scrobble { input, busy, err }) = &self.popup else { return };
@@ -1284,6 +1318,7 @@ impl App {
             (Some(Popup::Wrapped { .. }), _) => s.foot_wrapped,
             (Some(Popup::Scrobble { .. }), _) => s.foot_spotify,
             (Some(Popup::Party), _) => s.foot_party,
+            (Some(Popup::Discord { .. }), _) => s.foot_spotify,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,

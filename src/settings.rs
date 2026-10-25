@@ -11,6 +11,7 @@ pub enum Setting {
     Account,
     Spotify,
     Scrobble,
+    Discord,
     Lang,
     Restore,
     Mouse,
@@ -42,7 +43,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify, Setting::Desktop]),
+    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::Discord, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify, Setting::Desktop]),
     (
         |s| s.sec_look,
         &[
@@ -75,6 +76,7 @@ impl Setting {
             Setting::Account => s.set_account,
             Setting::Spotify => s.set_spotify,
             Setting::Scrobble => s.set_scrobble,
+            Setting::Discord => s.set_discord,
             Setting::Lang => s.set_lang,
             Setting::Restore => s.set_restore,
             Setting::Mouse => s.set_mouse,
@@ -127,7 +129,7 @@ impl Setting {
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
             Setting::Crossfade => "crossfade",
-            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Cover | Setting::Autoplay => return None,
+            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord | Setting::Cover | Setting::Autoplay => return None,
         })
     }
 }
@@ -144,6 +146,7 @@ impl App {
             Setting::Account => self.account_name(),
             Setting::Spotify => self.spotify.as_ref().map(|s| s.user()).unwrap_or_else(|| s.account_none.into()),
             Setting::Scrobble => self.lb.as_ref().map(|l| l.0.clone()).unwrap_or_else(|| s.account_none.into()),
+            Setting::Discord => yn(!c.discord.is_empty()),
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
             Setting::Mouse => yn(c.mouse),
@@ -177,19 +180,20 @@ impl App {
     }
 
     fn change(&mut self, k: Setting, d: isize) {
-        if matches!(k, Setting::Account | Setting::Spotify | Setting::Scrobble) {
+        if matches!(k, Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord) {
             // los ajustes se guardan aquí: el popup de la cuenta los sustituye
             let _ = self.cfg.save();
             self.cfg_mtimes = config::mtimes();
             return match k {
                 Setting::Account => self.open_login(),
                 Setting::Spotify => self.open_spotify(),
+                Setting::Discord => self.popup = Some(Popup::Discord { input: self.cfg.discord.clone(), err: None }),
                 _ => self.popup = Some(Popup::Scrobble { input: String::new(), busy: false, err: None }),
             };
         }
         let c = &mut self.cfg;
         match k {
-            Setting::Account | Setting::Spotify | Setting::Scrobble => {}
+            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord => {}
             Setting::Lang => {
                 let old = c.lang;
                 c.lang = c.lang.step(d);

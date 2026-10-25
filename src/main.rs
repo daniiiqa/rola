@@ -5,6 +5,7 @@
 
 mod api;
 mod config;
+mod discord;
 mod hypr;
 mod i18n;
 mod login;
@@ -113,6 +114,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// Discord: el Application ID que se va pegando
+    Discord { input: String, err: Option<String> },
     /// modo fiesta: el QR y el enlace
     Party,
     /// ListenBrainz: el token que se va pegando
@@ -200,6 +203,8 @@ struct App {
     listened: f64,                        // segundos oídos de verdad de la actual (sin saltos)
     song_unix: i64,                       // cuándo empezó la actual (segundo unix)
     party: Option<party::Party>,          // modo fiesta encendido
+    rpc: Option<Sender<discord::Presence>>, // el estado de Discord
+    rpc_last: (u64, discord::Presence),     // lo último mandado (con su track_n)
     lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
     popup: Option<Popup>,
     picker: Picker,
@@ -320,6 +325,8 @@ impl App {
             listened: 0.0,
             song_unix: 0,
             party: None,
+            rpc: None,
+            rpc_last: (0, None),
             lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
             popup: None,
             picker,
@@ -1128,6 +1135,9 @@ impl App {
             if matches!(popup, Popup::Party) {
                 return self.party_popup_key(k);
             }
+            if matches!(popup, Popup::Discord { .. }) {
+                return self.discord_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -1695,6 +1705,84 @@ impl App {
         }
     }
 
+    // ── Discord ──
+    /// Lo que debe verse en Discord, si ha cambiado (canción, pausa, salto).
+    fn discord_sync(&mut self) {
+        if self.cfg.discord.is_empty() {
+            if self.rpc.take().is_some() {
+                self.rpc_last = (0, None);
+            }
+            return;
+        }
+        let tx = self.rpc.get_or_insert_with(|| discord::start(self.cfg.discord.clone())).clone();
+        let want: discord::Presence = match self.current() {
+            Some(it) if self.playing() => {
+                let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+                let start = now - (self.pos.unwrap_or(0.0) * 1000.0) as i64;
+                let s = self.s();
+                Some(discord::Song {
+                    title: it.title.clone(),
+                    artist: it.artist.clone(),
+                    album: it.album.clone(),
+                    cover: it.cover_url(),
+                    link: it.link().map(|u| (if it.is_spotify() { s.dc_sp } else { s.dc_yt }.to_string(), u)),
+                    start_ms: start,
+                    end_ms: self.dur.map(|d| start + (d * 1000.0) as i64),
+                })
+            }
+            _ => None,
+        };
+        // el reloj corre solo: solo cuenta si saltó (más de 3 s) o cambió lo demás
+        let same = match (&self.rpc_last.1, &want) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                self.rpc_last.0 == self.track_n
+                    && (a.start_ms - b.start_ms).abs() < 3000
+                    && a.end_ms.is_some() == b.end_ms.is_some()
+                    && a.title == b.title
+            }
+            _ => false,
+        };
+        if !same {
+            let _ = tx.send(want.clone());
+            self.rpc_last = (self.track_n, want);
+        }
+    }
+
+    fn discord_key(&mut self, k: KeyEvent) {
+        let bad = self.s().dc_bad;
+        let Some(Popup::Discord { input, err }) = &mut self.popup else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc => self.popup = None,
+            KeyCode::Enter => {
+                let id = input.trim().to_string();
+                if !(17..=21).contains(&id.len()) || !id.chars().all(|c| c.is_ascii_digit()) {
+                    *err = Some(bad.into());
+                    return;
+                }
+                self.cfg.discord = id;
+                self.rpc = None; // con el ID nuevo
+                self.rpc_last = (0, None);
+                self.popup = None;
+                let _ = self.cfg.save();
+                self.cfg_mtimes = config::mtimes();
+                self.notify(self.s().dc_on, false);
+            }
+            KeyCode::Char('d') if ctrl && !self.cfg.discord.is_empty() => {
+                self.cfg.discord.clear();
+                let _ = self.cfg.save();
+                self.cfg_mtimes = config::mtimes();
+                self.popup = None;
+                self.notify(self.s().dc_off, false);
+            }
+            KeyCode::Char('u') if ctrl => input.clear(),
+            KeyCode::Backspace => drop(input.pop()),
+            KeyCode::Char(c) if !ctrl => input.push(c),
+            _ => {}
+        }
+    }
+
     // ── modo fiesta ──
     /// F: la enciende (y enseña el QR); encendida, enseña el QR otra vez.
     fn party_key(&mut self) {
@@ -2140,6 +2228,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
             break Ok(());
         }
         app.mpris_sync();
+        app.discord_sync();
         if last_tick.elapsed() >= Duration::from_millis(500) {
             urgent |= app.tick();
             last_tick = Instant::now();

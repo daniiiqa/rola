@@ -118,6 +118,15 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Discord
+
+`o` → Discord: lo que suena sale en tu estado («Escuchando una rola»), con la
+canción, el artista, la portada, la barra de progreso y un botón para
+escucharla. En pausa se quita. Hace falta una aplicación tuya en
+[discord.com/developers](https://discord.com/developers/applications): su
+nombre es lo que se lee tras «Escuchando» (el verbo lo pone Discord, en el
+idioma de quien mira). Pega su Application ID en rola y listo.
+
 ## Modo fiesta
 
 `F`: rola se vuelve una rocola. Sale un QR (y el enlace) para que los demás,
