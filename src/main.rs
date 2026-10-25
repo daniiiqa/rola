@@ -32,9 +32,9 @@ pub enum Ev {
     Resize,
     Prop(String, Value),
     End(bool),
-    Loaded { seq: u64, title: String, reset: bool, res: Result<Vec<Item>, String> },
+    Loaded { seq: u64, title: String, reset: bool, radio: bool, res: Result<Vec<Item>, String> },
     Playlists(Vec<Item>),
-    Radio { items: Vec<Item>, play: bool },
+    Radio { seed: String, res: Result<Vec<Item>, String> },
     Lyrics { vid: String, res: Result<Option<(String, String)>, String> },
     Cover { vid: String, img: image::DynamicImage },
     Notify(String, bool),
@@ -99,6 +99,7 @@ struct View {
     title: String,
     items: Vec<Item>,
     queue: bool, // la cola en vivo (items vacío)
+    radio: bool, // Enter en una canción pone su radio (inicio, búsqueda), como en YT Music
     state: TableState,
 }
 
@@ -143,6 +144,8 @@ struct App {
     shuffle: bool,
     repeat: Repeat,
     autoplay: bool,
+    radio_pending: Option<(String, bool)>, // radio pedida (semilla, sonar al llegar)
+    radio_seed: Option<String>, // la última semilla pedida
     errors: u32, // fallos seguidos; con 3 deja de saltar
     note: Option<(String, bool, Instant)>,
     rng: u64,
@@ -218,6 +221,8 @@ impl App {
                 _ => Repeat::Off,
             },
             autoplay: st["autoplay"].as_bool().unwrap_or(true),
+            radio_pending: None,
+            radio_seed: None,
             errors: 0,
             note: None,
             rng: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1,
@@ -351,7 +356,7 @@ impl App {
                 self.loading = None;
                 self.views.clear();
                 let sel = self.qi.unwrap_or(0);
-                self.push(View { title, items: Vec::new(), queue: true, state: TableState::default().with_selected(Some(sel)) });
+                self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)) });
             }
             Side::Sep | Side::Hint => return,
         }
@@ -363,6 +368,7 @@ impl App {
         self.seq += 1;
         let (seq, api, tx, title) = (self.seq, self.api.clone(), self.tx.clone(), title.to_string());
         self.loading = Some(title.clone());
+        let radio = matches!(load, Load::Home | Load::Search(_));
         std::thread::spawn(move || {
             let res = match load {
                 Load::Home => api.home(),
@@ -375,7 +381,7 @@ impl App {
                 Load::Artist(id) => api.artist(&id),
                 Load::Search(q) => api.search(&q),
             };
-            let _ = tx.send(Ev::Loaded { seq, title, reset, res });
+            let _ = tx.send(Ev::Loaded { seq, title, reset, radio, res });
         });
     }
 
@@ -412,6 +418,9 @@ impl App {
         if queue_view {
             return self.play_index(i);
         }
+        if it.playable() && self.views.last().is_some_and(|v| v.radio) {
+            return self.start_radio(it);
+        }
         if it.playable() {
             let items: Vec<Item> = self.items().iter().filter(|x| x.playable()).cloned().collect();
             let start = self.items()[..i].iter().filter(|x| x.playable()).count();
@@ -433,6 +442,7 @@ impl App {
     }
 
     fn play_from(&mut self, mut items: Vec<Item>, start: usize) {
+        self.radio_pending = None;
         if self.shuffle {
             let first = items.remove(start);
             self.shuffle_vec(&mut items);
@@ -652,19 +662,47 @@ impl App {
             return self.play_index(0);
         }
         if self.autoplay {
-            if let Some(seed) = self.current().cloned() {
-                self.radio(&seed, true);
+            match &mut self.radio_pending {
+                Some((_, play)) => *play = true, // ya viene: que suene al llegar
+                None => {
+                    if let Some(seed) = self.current().cloned() {
+                        self.radio(&seed, true);
+                    }
+                }
             }
         }
     }
 
+    /// La canción y detrás su radio, que se va alargando sola.
+    fn start_radio(&mut self, it: Item) {
+        self.queue = vec![it.clone()];
+        self.play_index(0);
+        self.radio(&it, false);
+        self.notify(fill(self.s().radio_of, &[&it.title]), false);
+    }
+
     fn radio(&mut self, seed: &Item, play: bool) {
         let Some(vid) = seed.video_id.clone() else { return };
+        self.radio_pending = Some((vid.clone(), play));
+        self.radio_seed = Some(vid.clone());
         let (api, tx) = (self.api.clone(), self.tx.clone());
-        std::thread::spawn(move || match api.radio(&vid) {
-            Ok(items) => drop(tx.send(Ev::Radio { items, play })),
-            Err(e) => drop(tx.send(Ev::Notify(format!("radio: {e}"), true))),
+        std::thread::spawn(move || {
+            let res = api.radio(&vid);
+            let _ = tx.send(Ev::Radio { seed: vid, res });
         });
+    }
+
+    /// Con autoplay, pide más radio cuando quedan un par de canciones, para
+    /// que no se corte ni haya que esperar al acabar la cola.
+    fn top_up_radio(&mut self) {
+        let Some(q) = self.qi else { return };
+        if !self.autoplay || self.repeat != Repeat::Off || self.radio_pending.is_some() || q + 3 < self.queue.len() {
+            return;
+        }
+        // si con esa semilla ya no salió nada nuevo, no insistir
+        if let Some(seed) = self.queue.last().cloned().filter(|x| x.video_id != self.radio_seed) {
+            self.radio(&seed, false);
+        }
     }
 
     // ── eventos ──
@@ -705,7 +743,7 @@ impl App {
                 }
                 self.advance(true);
             }
-            Ev::Loaded { seq, title, reset, res } => {
+            Ev::Loaded { seq, title, reset, radio, res } => {
                 if seq != self.seq {
                     return;
                 }
@@ -716,7 +754,7 @@ impl App {
                             self.views.clear();
                         }
                         let state = TableState::default().with_selected(Some(0));
-                        self.push(View { title, items, queue: false, state });
+                        self.push(View { title, items, queue: false, radio, state });
                     }
                     Err(e) => self.notify(format!("{title}: {e}"), true),
                 }
@@ -743,7 +781,13 @@ impl App {
                     }
                 }
             }
-            Ev::Radio { items, play } => {
+            Ev::Radio { seed, res } => {
+                // de una cola que ya no está (se puso otra cosa mientras)
+                let Some((_, play)) = self.radio_pending.take_if(|(s, _)| *s == seed) else { return };
+                let items = match res {
+                    Ok(items) => items,
+                    Err(e) => return self.notify(format!("radio: {e}"), true),
+                };
                 let have: std::collections::HashSet<_> = self.queue.iter().map(|x| x.video_id.clone()).collect();
                 let start = self.queue.len();
                 self.queue.extend(items.into_iter().filter(|x| !have.contains(&x.video_id)));
@@ -909,10 +953,7 @@ impl App {
             KeyCode::Char('z') => self.enqueue(),
             KeyCode::Char('R') => {
                 if let Some((_, it)) = self.selected().filter(|(_, it)| it.playable()) {
-                    self.queue = vec![it.clone()];
-                    self.play_index(0);
-                    self.radio(&it, false);
-                    self.notify(fill(self.s().radio_of, &[&it.title]), false);
+                    self.start_radio(it);
                 }
             }
             KeyCode::Char('L') => self.like(),
@@ -1069,6 +1110,7 @@ impl App {
     /// Cada medio segundo; true si hay que redibujar.
     fn tick(&mut self) -> bool {
         let mut changed = self.check_files();
+        self.top_up_radio();
         self.prefetch_ahead();
         if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {
             self.note = None;

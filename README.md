@@ -70,6 +70,13 @@ directo, ~0.2 s. Así que rola resuelve por adelantado la siguiente de la cola
 (y la canción en la que dejas el cursor) y le pasa a mpv el enlace ya hecho.
 Si un enlace caduca o falla, vuelve al camino normal solo.
 
+## Radio
+
+Como en YT Music: `Enter` en una canción del inicio o de una búsqueda pone esa
+canción y detrás su radio. En álbumes y playlists suena la lista en orden y,
+con autoplay, al final sigue la radio de la última. Cuando quedan un par de
+canciones pide más, así que no se corta.
+
 ## Teclas
 
 `/` buscar · `Enter` reproducir/abrir · `espacio` pausa · `n`/`p` sig./ant. ·

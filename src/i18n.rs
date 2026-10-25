@@ -217,7 +217,7 @@ pub static ES: Strings = Strings {
     custom_themes: "temas propios: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "buscar"),
-        ("Enter", "reproducir / abrir"),
+        ("Enter", "reproducir / abrir (en inicio y búsqueda, con su radio)"),
         ("espacio", "pausa"),
         ("n  p", "siguiente / anterior"),
         ("<  >", "atrasar / adelantar"),
@@ -357,7 +357,7 @@ pub static EN: Strings = Strings {
     custom_themes: "custom themes: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "search"),
-        ("Enter", "play / open"),
+        ("Enter", "play / open (in home and search, with its radio)"),
         ("space", "pause"),
         ("n  p", "next / previous"),
         ("<  >", "seek back / forward"),
