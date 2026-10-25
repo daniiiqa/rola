@@ -118,6 +118,12 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Fundido entre canciones
+
+`o` → «Fundido entre canciones» (3 a 12 s): al final de cada una, la siguiente
+entra subiendo mientras la que se va se apaga. Hace falta que la siguiente ya
+tenga su enlace (rola lo pide por adelantado); si no, pasa sin fundido.
+
 ## Avisos del escritorio
 
 `o` → «Avisos del escritorio con cada canción»: un aviso con portada, título y

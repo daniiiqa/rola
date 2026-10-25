@@ -122,6 +122,29 @@ impl Mpv {
     }
 }
 
+/// Un mpv suelto que toca el final de la que se va, apagándose en `secs`:
+/// la mitad del fundido (la otra es la siguiente entrando en el de siempre).
+pub fn ghost(url: &str, from: f64, secs: f64, volume: i64) -> Option<Child> {
+    let mut cmd = Command::new("mpv");
+    cmd.args(["--no-video", "--no-terminal", "--force-window=no", "--load-scripts=no"])
+        .arg(format!("--start={from:.2}"))
+        .arg(format!("--length={:.2}", secs + 0.3))
+        .arg(format!("--volume={volume}"))
+        // afade cuenta en tiempo de la canción, que con --start empieza en `from`
+        .arg(format!("--af=lavfi=[afade=t=out:st={from:.2}:d={secs}]"))
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    cmd.spawn().ok()
+}
+
 impl Drop for Mpv {
     fn drop(&mut self) {
         self.cmd(json!(["quit"]));

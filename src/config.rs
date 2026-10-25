@@ -153,6 +153,7 @@ pub struct Config {
     pub lyrics_width: u16, // % del panel principal
     pub footer: bool,
     pub desktop: Desktop,
+    pub crossfade: u64, // segundos; 0: sin fundido
     pub motion: bool, // ecualizador, títulos que se desplazan, aviso de canción nueva
     pub quality: Quality,
     pub vol_step: i64,
@@ -172,6 +173,7 @@ pub const LYRICS_WIDTHS: &[u16] = &[30, 35, 40, 45, 50, 60];
 pub const VOL_STEPS: &[i64] = &[1, 2, 5, 10];
 pub const SEEKS: &[i64] = &[5, 10, 15, 30, 60];
 pub const NOTIFY_SECS: &[u64] = &[2, 4, 6, 10];
+pub const CROSSFADES: &[u64] = &[0, 3, 6, 9, 12];
 
 /// El siguiente (o anterior) de `opts` a partir de `cur`, sin dar la vuelta.
 pub fn step_in<T: Copy + PartialOrd>(opts: &[T], cur: T, d: isize) -> T {
@@ -196,6 +198,7 @@ impl Default for Config {
             lyrics_width: 40,
             footer: true,
             desktop: Desktop::Off,
+            crossfade: 0,
             motion: true,
             quality: Quality::Best,
             vol_step: 5,
@@ -254,6 +257,7 @@ impl Config {
             lyrics_width: num("lyrics_width", d.lyrics_width as u64, 20, 80) as u16,
             footer: v["footer"].as_bool().unwrap_or(d.footer),
             desktop: v["desktop"].as_str().and_then(Desktop::parse).unwrap_or(d.desktop),
+            crossfade: v["crossfade"].as_u64().unwrap_or(d.crossfade).min(30),
             motion: v["motion"].as_bool().unwrap_or(d.motion),
             quality: pick(&v["quality"], d.quality),
             vol_step: num("vol_step", d.vol_step as u64, 1, 25) as i64,
@@ -286,6 +290,7 @@ impl Config {
             "lyrics_width": self.lyrics_width,
             "footer": self.footer,
             "desktop": self.desktop.key(),
+            "crossfade": self.crossfade,
             "motion": self.motion,
             "quality": self.quality.key(),
             "vol_step": self.vol_step,

@@ -15,6 +15,7 @@ pub enum Setting {
     Mouse,
     Notify,
     Desktop,
+    Crossfade,
     Theme,
     Background,
     Borders,
@@ -58,7 +59,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Cover,
         ],
     ),
-    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Autoplay]),
+    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Crossfade, Setting::Autoplay]),
 ];
 
 pub fn all() -> impl Iterator<Item = Setting> {
@@ -91,6 +92,7 @@ impl Setting {
             Setting::Quality => s.set_quality,
             Setting::VolStep => s.set_vol_step,
             Setting::Seek => s.set_seek,
+            Setting::Crossfade => s.set_crossfade,
             Setting::Autoplay => s.set_autoplay,
         }
     }
@@ -118,6 +120,7 @@ impl Setting {
             Setting::Quality => "quality",
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
+            Setting::Crossfade => "crossfade",
             Setting::Account | Setting::Spotify | Setting::Cover | Setting::Autoplay => return None,
         })
     }
@@ -159,6 +162,8 @@ impl App {
             Setting::Quality => s.qualities[idx(c.quality)].into(),
             Setting::VolStep => format!("{}%", c.vol_step),
             Setting::Seek => format!("{} s", c.seek),
+            Setting::Crossfade if c.crossfade == 0 => yn(false),
+            Setting::Crossfade => format!("{} s", c.crossfade),
             Setting::Autoplay => yn(self.autoplay),
         }
     }
@@ -216,6 +221,7 @@ impl App {
             }
             Setting::VolStep => c.vol_step = step_in(config::VOL_STEPS, c.vol_step, d),
             Setting::Seek => c.seek = step_in(config::SEEKS, c.seek, d),
+            Setting::Crossfade => c.crossfade = step_in(config::CROSSFADES, c.crossfade, d),
             Setting::Autoplay => self.autoplay = !self.autoplay,
         }
         self.reload_theme();

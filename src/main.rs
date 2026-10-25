@@ -176,6 +176,10 @@ struct App {
     lyrics_total: Cell<u16>,      // filas de la letra con tiempos (ya partidas al ancho)
     sleep: Sleep,
     desktop: Option<Sender<notif::Song>>, // avisos del escritorio
+    ghost: Option<std::process::Child>,   // el final de la anterior apagándose (fundido)
+    xfaded: u64,                          // track_n de la que ya empezó a fundirse
+    fade_in: Option<f64>,                 // la siguiente que se cargue entra subiendo en tantos s
+    af_on: bool,                          // mpv tiene puesto el filtro de entrada
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -282,6 +286,10 @@ impl App {
             lyrics_total: Cell::new(0),
             sleep: Sleep::Off,
             desktop: None,
+            ghost: None,
+            xfaded: 0,
+            fade_in: None,
+            af_on: false,
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -668,6 +676,18 @@ impl App {
         self.track_n += 1;
         self.splash = Some(Instant::now());
         self.announce(i);
+        // el fundido: la que entra sube desde cero; las demás, sin filtro
+        let fade = self.fade_in.take();
+        if fade.is_none() {
+            self.kill_ghost();
+        }
+        if fade.is_some() || self.af_on {
+            match fade {
+                Some(x) => self.mpv.cmd(json!(["af", "set", format!("lavfi=[afade=t=in:d={x:.2}]")])),
+                None => self.mpv.cmd(json!(["af", "clr", ""])),
+            }
+            self.af_on = fade.is_some();
+        }
         self.added = 0;
         self.loaded = true;
         self.pos = None;
@@ -1131,9 +1151,18 @@ impl App {
             Ev::Resize => {}
             Ev::Prop(name, data) => match name.as_str() {
                 // sin nada cargado mpv dice null y se perdería la posición restaurada
-                "time-pos" if self.loaded => self.pos = data.as_f64(),
+                "time-pos" if self.loaded => {
+                    self.pos = data.as_f64();
+                    self.maybe_crossfade();
+                }
                 "duration" if self.loaded => self.dur = data.as_f64(),
-                "pause" => self.paused = data.as_bool().unwrap_or(true),
+                "pause" => {
+                    self.paused = data.as_bool().unwrap_or(true);
+                    // en pausa, tampoco el final de la anterior
+                    if self.paused {
+                        self.kill_ghost();
+                    }
+                }
                 // la bajada del temporizador no es tu volumen
                 "volume" if !self.fading() => {
                     if let Some(v) = data.as_f64() {
@@ -1489,6 +1518,45 @@ impl App {
         }
     }
 
+    // ── fundido entre canciones ──
+    /// A `crossfade` s del final, si la siguiente ya tiene su enlace listo:
+    /// un mpv aparte toca lo que queda de esta apagándose y el de siempre
+    /// pone la siguiente subiendo. Sin enlace listo, como siempre (sin hueco
+    /// de todas formas, porque arranca al momento).
+    fn maybe_crossfade(&mut self) {
+        let x = self.cfg.crossfade as f64;
+        if x == 0.0 || !self.playing() || !self.direct || self.xfaded == self.track_n {
+            return;
+        }
+        // repetir una o «al acabar esta»: ahí no se pasa a otra
+        if self.repeat == Repeat::One || self.sleep == Sleep::EndOfSong {
+            return;
+        }
+        let (Some(pos), Some(dur), Some(qi)) = (self.pos, self.dur, self.qi) else { return };
+        if dur - pos > x || dur < x * 3.0 {
+            return;
+        }
+        let Some(next) = self.queue.get(qi + 1).and_then(|n| n.video_id.clone()) else { return };
+        if !self.streams.get(&next).is_some_and(|l| l.fresh() && l.wait().is_zero()) {
+            return;
+        }
+        let Some(cur) = self.current().and_then(|c| c.video_id.clone()) else { return };
+        let Some(link) = self.streams.get(&cur).filter(|l| l.fresh()).cloned() else { return };
+        self.xfaded = self.track_n;
+        let left = dur - pos;
+        self.kill_ghost();
+        self.ghost = mpv::ghost(&link.url, pos, left, self.volume);
+        self.fade_in = Some(left);
+        self.play_index(qi + 1);
+    }
+
+    fn kill_ghost(&mut self) {
+        if let Some(mut g) = self.ghost.take() {
+            let _ = g.kill();
+            let _ = g.wait();
+        }
+    }
+
     // ── temporizador ──
     /// t: no → al acabar esta → 15 → 30 → 45 → 60 → 90 min → no.
     fn cycle_sleep(&mut self) {
@@ -1759,6 +1827,10 @@ impl App {
         self.top_up_radio();
         self.prefetch_ahead();
         self.sleep_tick();
+        // el final de la anterior que ya acabó solo
+        if self.ghost.as_mut().is_some_and(|g| g.try_wait().is_ok_and(|e| e.is_some())) {
+            self.ghost = None;
+        }
         if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {
             self.note = None;
             changed = true;
