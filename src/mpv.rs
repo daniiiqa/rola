@@ -23,13 +23,13 @@ impl Mpv {
         // sockets de sesiones que murieron sin limpiar (terminal cerrada a la mala)
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if let Some(pid) = name.strip_prefix("ytm-mpv-").and_then(|s| s.strip_suffix(".sock")) {
+            if let Some(pid) = name.strip_prefix("rola-mpv-").and_then(|s| s.strip_suffix(".sock")) {
                 if !PathBuf::from(format!("/proc/{pid}")).exists() {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
         }
-        let path = PathBuf::from(dir).join(format!("ytm-mpv-{}.sock", std::process::id()));
+        let path = PathBuf::from(dir).join(format!("rola-mpv-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut cmd = Command::new("mpv");
         cmd.args([
@@ -37,7 +37,7 @@ impl Mpv {
             "--no-video",
             "--no-terminal",
             "--force-window=no",
-            "--title=ytm",
+            "--title=rola",
             // el cliente por defecto de yt-dlp da 403 al stremear; web_music no
             "--ytdl-raw-options-append=extractor-args=youtube:player_client=web_music",
         ])
@@ -47,7 +47,7 @@ impl Mpv {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-        // si ytm muere (ventana cerrada, kill), mpv se va con él
+        // si rola muere (ventana cerrada, kill), mpv se va con él
         unsafe {
             cmd.pre_exec(|| {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);

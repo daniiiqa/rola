@@ -1,8 +1,8 @@
-//! Ajustes en `~/.config/ytm/config.json`. Se editan desde la app (`o`), pero
+//! Ajustes en `~/.config/rola/config.json`. Se editan desde la app (`o`), pero
 //! el archivo se puede tocar a mano; lo que falte o no se entienda queda por
 //! defecto.
 //!
-//! `~/.config/ytm/look.json`, si existe, pisa las claves que traiga: es lo que
+//! `~/.config/rola/look.json`, si existe, pisa las claves que traiga: es lo que
 //! cambia cada look de Hyprland (LookSwitch.sh lo copia como al resto de
 //! archivos del look). Lo que se cambie desde la app en una de esas claves se
 //! guarda ahí, así que vuelve con el look.
@@ -17,7 +17,7 @@ pub fn dir() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"))
-        .join("ytm")
+        .join("rola")
 }
 
 fn file() -> PathBuf {

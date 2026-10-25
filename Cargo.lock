@@ -768,6 +768,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rola"
+version = "0.2.0"
+dependencies = [
+ "image",
+ "libc",
+ "ratatui",
+ "ratatui-image",
+ "serde_json",
+ "sha1_smol",
+ "ureq",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,19 +1369,6 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "synstructure",
-]
-
-[[package]]
-name = "ytm"
-version = "0.2.0"
-dependencies = [
- "image",
- "libc",
- "ratatui",
- "ratatui-image",
- "serde_json",
- "sha1_smol",
- "ureq",
 ]
 
 [[package]]

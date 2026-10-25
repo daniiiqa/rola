@@ -1,6 +1,6 @@
 //! Temas: el que tenga kitty puesto ahora (lo cambian los looks de Hyprland),
 //! wallust (el theme de kitty que genera), los colores de la terminal, unos
-//! cuantos predefinidos y los que pongas en `~/.config/ytm/themes/*.conf`
+//! cuantos predefinidos y los que pongas en `~/.config/rola/themes/*.conf`
 //! (mismo formato que un theme de kitty). Los que salen de un archivo se
 //! recargan solos al cambiar.
 

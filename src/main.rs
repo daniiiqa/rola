@@ -1,7 +1,7 @@
-//! ytm — YouTube Music en la terminal, al estilo spotify-tui.
+//! rola — YouTube Music en la terminal, al estilo spotify-tui.
 //!
-//!     ytm            abre la app
-//!     ytm --login    conecta tu cuenta (biblioteca, playlists, me gusta)
+//!     rola            abre la app
+//!     rola --login    conecta tu cuenta (biblioteca, playlists, me gusta)
 
 mod api;
 mod config;
@@ -153,14 +153,14 @@ fn data_dir() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"))
-        .join("ytm")
+        .join("rola")
 }
 
 fn state_file() -> PathBuf {
     std::env::var("XDG_STATE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state"))
-        .join("ytm/state.json")
+        .join("rola/state.json")
 }
 
 impl App {
@@ -1143,7 +1143,19 @@ fn login() {
     }
 }
 
+/// Antes se llamaba ytm: la primera vez, sus carpetas pasan a las de rola.
+fn migrate() {
+    let state = state_file();
+    for new in [config::dir(), data_dir(), state.parent().map(PathBuf::from).unwrap_or_default()] {
+        let old = new.with_file_name("ytm");
+        if old.is_dir() && !new.exists() {
+            let _ = std::fs::rename(&old, &new);
+        }
+    }
+}
+
 fn main() {
+    migrate();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--login") {
         return login();
@@ -1161,7 +1173,7 @@ fn main() {
         Ok(a) => a,
         Err(e) => {
             ratatui::restore();
-            eprintln!("ytm: {e}");
+            eprintln!("rola: {e}");
             std::process::exit(1);
         }
     };
@@ -1178,6 +1190,6 @@ fn main() {
         }
     });
     if let Err(e) = run(rx, app, term) {
-        eprintln!("ytm: {e}");
+        eprintln!("rola: {e}");
     }
 }

@@ -152,7 +152,7 @@ pub static ES: Strings = Strings {
     albums: "Álbumes",
     artists: "Artistas",
     queue: "Cola",
-    no_account_hint: "sin cuenta: ytm --login",
+    no_account_hint: "sin cuenta: rola --login",
     search_placeholder: "buscar en YouTube Music  ( / )",
     lyrics: "letra",
     nothing_playing: "nada sonando",
@@ -167,7 +167,7 @@ pub static ES: Strings = Strings {
     keys_title: "teclas",
     add_to: "añadir «{}» a…",
     removed: "quitada de la cola: {}",
-    need_account: "necesitas cuenta: ytm --login",
+    need_account: "necesitas cuenta: rola --login",
     no_playlists: "no hay playlists en tu biblioteca (¿aún cargando?)",
     play_failed: "no se pudo reproducir: {}",
     many_errors: "varios fallos seguidos; ¿yt-dlp desactualizado?",
@@ -214,7 +214,7 @@ pub static ES: Strings = Strings {
     tints: ["a color", "fósforo (todo en un color)", "tinta (grises)"],
     bars: ["línea", "línea con bola", "bloques", "puntos", "ascii"],
     qualities: ["la mejor", "media (≤128k)", "baja (ahorra datos)"],
-    custom_themes: "temas propios: ~/.config/ytm/themes/*.conf",
+    custom_themes: "temas propios: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "buscar"),
         ("Enter", "reproducir / abrir"),
@@ -268,7 +268,7 @@ pub static ES: Strings = Strings {
         ("?", "ayuda"),
         ("q", "salir"),
     ],
-    cli_help: "ytm — YouTube Music en la terminal\n\n  ytm            abre la app\n  ytm --login    conecta tu cuenta",
+    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app\n  rola --login    conecta tu cuenta",
     login_intro: "Conectar tu cuenta de YouTube Music:
 
   1. Abre https://music.youtube.com con tu sesión iniciada.
@@ -292,7 +292,7 @@ pub static EN: Strings = Strings {
     albums: "Albums",
     artists: "Artists",
     queue: "Queue",
-    no_account_hint: "no account: ytm --login",
+    no_account_hint: "no account: rola --login",
     search_placeholder: "search YouTube Music  ( / )",
     lyrics: "lyrics",
     nothing_playing: "nothing playing",
@@ -307,7 +307,7 @@ pub static EN: Strings = Strings {
     keys_title: "keys",
     add_to: "add “{}” to…",
     removed: "removed from queue: {}",
-    need_account: "you need an account: ytm --login",
+    need_account: "you need an account: rola --login",
     no_playlists: "no playlists in your library (still loading?)",
     play_failed: "couldn't play: {}",
     many_errors: "several failures in a row; is yt-dlp outdated?",
@@ -354,7 +354,7 @@ pub static EN: Strings = Strings {
     tints: ["full color", "phosphor (one color)", "ink (grayscale)"],
     bars: ["line", "line with knob", "blocks", "dots", "ascii"],
     qualities: ["best", "medium (≤128k)", "low (saves data)"],
-    custom_themes: "custom themes: ~/.config/ytm/themes/*.conf",
+    custom_themes: "custom themes: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "search"),
         ("Enter", "play / open"),
@@ -408,7 +408,7 @@ pub static EN: Strings = Strings {
         ("?", "help"),
         ("q", "quit"),
     ],
-    cli_help: "ytm — YouTube Music in the terminal\n\n  ytm            open the app\n  ytm --login    connect your account",
+    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app\n  rola --login    connect your account",
     login_intro: "Connect your YouTube Music account:
 
   1. Open https://music.youtube.com while signed in.

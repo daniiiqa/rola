@@ -1,4 +1,7 @@
-# ytm
+# rola
+
+*Rola*: canción, en México. (Antes se llamaba ytm; la primera vez que
+abre, rola mueve solo las carpetas de `ytm` a las suyas.)
 
 YouTube Music en la terminal, al estilo spotify-tui. Rust + ratatui; el audio
 lo pone mpv (con mpv-mpris sale en waybar/playerctl). Habla directo con la API
@@ -8,12 +11,12 @@ interna de YouTube Music, sin runtime ni librerías de Python.
 
 ```bash
 sudo pacman -S --needed mpv yt-dlp mpv-mpris
-cargo install --path . --root ~/.local --force   # deja ~/.local/bin/ytm
+cargo install --path . --root ~/.local --force   # deja ~/.local/bin/rola
 ```
 
-`ytm --login` conecta tu cuenta (me gusta, historial, playlists, álbumes,
+`rola --login` conecta tu cuenta (me gusta, historial, playlists, álbumes,
 artistas); sin login funcionan búsqueda e inicio. La cookie queda en
-`~/.local/share/ytm/auth.json` (0600).
+`~/.local/share/rola/auth.json` (0600).
 
 La portada de lo que suena sale al pie de la barra lateral: en kitty (o
 cualquier terminal con kitty graphics, sixel o iTerm2) como imagen de verdad,
@@ -22,7 +25,7 @@ en las demás con medios bloques.
 ## Ajustes y temas
 
 `o` abre los ajustes; los cambios se ven al momento y se guardan al cerrar en
-`~/.config/ytm/config.json` (se puede editar a mano):
+`~/.config/rola/config.json` (se puede editar a mano):
 
 - **General**: idioma (español / English), recuperar la sesión al abrir,
   duración de los avisos.
@@ -41,7 +44,7 @@ kitty, y al wallpaper cuando ese theme es el de wallust; `wallust` lee siempre
 `~/.config/kitty/kitty-themes/01-Wallust.conf` (otra ruta con `"wallust"` en
 el config); `terminal` (los 16 colores de tu terminal), catppuccin-mocha,
 catppuccin-latte, tokyo-night, gruvbox, nord, dracula, rose-pine, everforest,
-kanagawa y youtube. Para uno propio, deja un `.conf` en `~/.config/ytm/themes/`
+kanagawa y youtube. Para uno propio, deja un `.conf` en `~/.config/rola/themes/`
 con el formato de un theme de kitty (`background`, `foreground`, `color0`…
 `color15`); `primary` y `accent` eligen los colores a mano y si no se usan
 `color12` y `color11`. Todos los que salen de un archivo se recargan solos.
@@ -52,10 +55,10 @@ quedan redondeados.
 
 ### Looks
 
-`~/.config/ytm/look.json`, si existe, pisa las claves que traiga del config
+`~/.config/rola/look.json`, si existe, pisa las claves que traiga del config
 (p. ej. `{"borders": "thick", "case": "upper", "select": "bar"}`). Pensado
 para un selector de looks que copie archivos a `~/.config`: cada look trae su
-`ytm/look.json` y ytm lo aplica al momento (mira el archivo y escucha cuando
+`rola/look.json` y rola lo aplica al momento (mira el archivo y escucha cuando
 Hyprland recarga su config). Lo que cambies en los ajustes sobre una de esas
 claves se guarda en `look.json` (marcado «del look» en el menú), así vuelve
 con ese look.
@@ -63,7 +66,7 @@ con ese look.
 ## Arranque rápido de canciones
 
 Pedirle a mpv que resuelva la canción con yt-dlp tarda ~3 s; con el enlace
-directo, ~0.2 s. Así que ytm resuelve por adelantado la siguiente de la cola
+directo, ~0.2 s. Así que rola resuelve por adelantado la siguiente de la cola
 (y la canción en la que dejas el cursor) y le pasa a mpv el enlace ya hecho.
 Si un enlace caduca o falla, vuelve al camino normal solo.
 
@@ -78,7 +81,7 @@ Si un enlace caduca o falla, vuelve al camino normal solo.
 En **Cola**: `Enter` salta a esa canción, `d`/`Supr` la quita, `J`/`K` la mueven.
 
 Al salir se guardan volumen, modos, la cola y por dónde ibas
-(`~/.local/state/ytm/state.json`); al volver, `espacio` sigue desde ahí.
+(`~/.local/state/rola/state.json`); al volver, `espacio` sigue desde ahí.
 
 ## Tests
 
