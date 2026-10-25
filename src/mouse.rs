@@ -65,7 +65,7 @@ impl App {
         } else if inside(h.rows, x, y) {
             self.table_move(d);
         } else if inside(h.lyrics, x, y) {
-            self.lyrics_scroll(d * 3);
+            self.lyrics_scroll(d);
         } else if inside(h.bar, x, y) {
             self.set_volume(-(d as i64) * self.cfg.vol_step);
         }

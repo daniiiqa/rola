@@ -8,6 +8,7 @@ mod config;
 mod hypr;
 mod i18n;
 mod login;
+mod lrclib;
 mod mouse;
 mod mpris;
 mod mpv;
@@ -20,7 +21,7 @@ mod ui;
 use api::{Api, Item, Kind};
 use config::Config;
 use i18n::{fill, Lang, Strings};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
@@ -43,7 +44,7 @@ pub enum Ev {
     Loaded { seq: u64, title: String, reset: bool, radio: bool, res: Result<Vec<Item>, String> },
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
-    Lyrics { vid: String, res: Result<Option<(String, String)>, String> },
+    Lyrics { vid: String, lyrics: Lyrics },
     Cover { vid: String, img: image::DynamicImage },
     Notify(String, bool),
     Stream { vid: String, format: &'static str, link: Option<stream::Link> },
@@ -83,6 +84,7 @@ pub enum Lyrics {
     Loading,
     Missing,
     Text(String, String), // letra, fuente
+    Synced(lrclib::Lines, String), // con tiempos: se resalta la que suena
     Err(String),
 }
 
@@ -157,6 +159,8 @@ struct App {
     lyrics_on: bool,
     lyrics: Option<(String, Lyrics)>, // video_id → letra
     lyrics_scroll: u16,
+    lyrics_hand: Option<Instant>, // cuándo se movió a mano (deja de seguir a la canción un rato)
+    lyrics_auto: Cell<u16>,       // dónde la dejó el último dibujo siguiendo a la canción
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -192,6 +196,8 @@ struct App {
 
 /// Lo que dura el aviso de canción nueva.
 pub const SPLASH: Duration = Duration::from_millis(3500);
+/// Tras mover la letra a mano, lo que tarda en volver a seguir a la canción.
+pub const LYRICS_HAND: Duration = Duration::from_secs(4);
 
 /// Pide (o deja de pedir) a la terminal los eventos del ratón.
 pub fn mouse_capture(on: bool) {
@@ -256,6 +262,8 @@ impl App {
             lyrics_on: st["lyrics"].as_bool().unwrap_or(false),
             lyrics: None,
             lyrics_scroll: 0,
+            lyrics_hand: None,
+            lyrics_auto: Cell::new(0),
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -933,26 +941,49 @@ impl App {
 
     // ── letra ──
     fn fetch_lyrics(&mut self) {
-        let Some(vid) = self.current().and_then(|x| x.video_id.clone()) else { return };
+        let Some(it) = self.current().cloned() else { return };
+        let Some(vid) = it.video_id.clone() else { return };
         if self.lyrics.as_ref().is_some_and(|(v, _)| *v == vid) {
             return;
         }
         self.lyrics = Some((vid.clone(), Lyrics::Loading));
         self.lyrics_scroll = 0;
+        self.lyrics_hand = None;
+        self.lyrics_auto.set(0);
         let (api, tx) = (self.api.clone(), self.tx.clone());
         std::thread::spawn(move || {
-            let res = api.lyrics(&vid);
-            let _ = tx.send(Ev::Lyrics { vid, res });
+            // con tiempos si LRCLIB la tiene; si no, la de YouTube Music
+            let lyrics = match lrclib::synced(&it) {
+                Some(l) => Lyrics::Synced(l, "LRCLIB".into()),
+                None => match api.lyrics(&vid) {
+                    Ok(Some((text, source))) => Lyrics::Text(text, source),
+                    Ok(None) => Lyrics::Missing,
+                    Err(e) => Lyrics::Err(e),
+                },
+            };
+            let _ = tx.send(Ev::Lyrics { vid, lyrics });
         });
     }
 
     fn lyrics_scroll(&mut self, d: isize) {
         let n = match &self.lyrics {
             Some((_, Lyrics::Text(t, _))) => t.lines().count(),
+            Some((_, Lyrics::Synced(l, _))) => l.len(),
             _ => 0,
         };
+        // desde donde iba siguiendo a la canción
+        if self.following_lyrics() {
+            self.lyrics_scroll = self.lyrics_auto.get();
+        }
+        self.lyrics_hand = Some(Instant::now());
         let s = (self.lyrics_scroll as isize + d).clamp(0, n.saturating_sub(1) as isize);
         self.lyrics_scroll = s as u16;
+    }
+
+    /// La letra sincronizada va sola con la canción, salvo un rato después
+    /// de moverla a mano.
+    pub fn following_lyrics(&self) -> bool {
+        matches!(self.lyrics, Some((_, Lyrics::Synced(..)))) && self.lyrics_hand.is_none_or(|t| t.elapsed() > LYRICS_HAND)
     }
 
     // ── añadir a playlist ──
@@ -1178,14 +1209,10 @@ impl App {
                     }
                 }
             }
-            Ev::Lyrics { vid, res } => {
+            Ev::Lyrics { vid, lyrics } => {
                 if let Some((v, l)) = &mut self.lyrics {
                     if *v == vid {
-                        *l = match res {
-                            Ok(Some((text, source))) => Lyrics::Text(text, source),
-                            Ok(None) => Lyrics::Missing,
-                            Err(e) => Lyrics::Err(e),
-                        };
+                        *l = lyrics;
                     }
                 }
             }

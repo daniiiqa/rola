@@ -108,6 +108,13 @@ canción y detrás su radio. En álbumes y playlists suena la lista en orden y,
 con autoplay, al final sigue la radio de la última. Cuando quedan un par de
 canciones pide más, así que no se corta.
 
+## Letra
+
+`y` la muestra. Si [LRCLIB](https://lrclib.net) la tiene con tiempos (casi
+siempre), la línea que suena se resalta y la letra avanza sola con la canción;
+si la mueves a mano, a los pocos segundos vuelve a seguirla. Si no, sale la de
+YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
+
 ## Ratón
 
 Clic en la barra lateral abre; en una canción la elige, doble clic la pone y

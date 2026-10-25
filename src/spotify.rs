@@ -450,9 +450,10 @@ mod tests {
         use std::net::TcpStream;
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
-        let req = |path: &'static str| {
+        // cada una a su hora: si la buena llegara antes, nadie atendería la otra
+        let req = |path: &'static str, ms: u64| {
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(150));
+                std::thread::sleep(Duration::from_millis(ms));
                 let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
                 write!(c, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
                 let mut out = String::new();
@@ -461,12 +462,12 @@ mod tests {
             })
         };
         // el favicon se ignora; vale el que trae el state bueno
-        let (f, ok) = (req("/favicon.ico"), req("/callback?code=AQB123&state=xyz"));
+        let (f, ok) = (req("/favicon.ico", 100), req("/callback?code=AQB123&state=xyz", 400));
         assert_eq!(wait_code(&l, "xyz").unwrap(), "AQB123");
         assert!(f.join().unwrap().starts_with("HTTP/1.1 404"));
         assert!(ok.join().unwrap().contains("connected"));
         // state cambiado (otra web intentando colarse): rechazado
-        let bad = req("/callback?code=EVIL&state=other");
+        let bad = req("/callback?code=EVIL&state=other", 100);
         assert!(wait_code(&l, "xyz").is_err());
         bad.join().unwrap();
     }

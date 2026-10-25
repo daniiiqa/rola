@@ -280,12 +280,39 @@ impl App {
                 }
                 text.lines().map(|l| Line::styled(l.to_string(), Style::new().fg(t.fg))).collect()
             }
+            Some((_, Lyrics::Synced(lines, source))) => {
+                block = block.title_bottom(Line::styled(format!(" {source} "), Style::new().fg(t.muted)).right_aligned());
+                // la que suena: la última que ya empezó (un pelín antes, que se lee tarde)
+                let pos = self.pos.unwrap_or(0.0) + 0.2;
+                let cur = lines.iter().rposition(|(at, _)| *at <= pos);
+                let out: Vec<Line> = lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, l))| {
+                        // los huecos sin letra (solos instrumentales) con una nota
+                        let l = if l.is_empty() { "♪".to_string() } else { l.clone() };
+                        let st = match cur {
+                            Some(c) if c == i => Style::new().fg(t.primary).bold(),
+                            Some(c) if i < c => Style::new().fg(t.muted),
+                            _ => Style::new().fg(t.fg),
+                        };
+                        Line::styled(l, st)
+                    })
+                    .collect();
+                // que la que suena quede a un tercio de arriba
+                let inner = block.inner(area);
+                let w = inner.width.max(1) as usize;
+                let above: usize = out[..cur.unwrap_or(0)].iter().map(|l| l.width().max(1).div_ceil(w)).sum();
+                self.lyrics_auto.set(above.saturating_sub(inner.height as usize / 3) as u16);
+                out
+            }
             Some((_, Lyrics::Missing)) => vec![Line::styled(self.tx(s.no_lyrics), muted)],
             Some((_, Lyrics::Err(e))) => vec![Line::styled(fill(s.load_failed, &[e]), Style::new().fg(t.accent))],
             Some((_, Lyrics::Loading)) | None => vec![Line::styled(self.tx(s.loading), muted)],
         };
         self.hits.borrow_mut().lyrics = area;
-        let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((self.lyrics_scroll, 0));
+        let scroll = if self.following_lyrics() { self.lyrics_auto.get() } else { self.lyrics_scroll };
+        let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((scroll, 0));
         f.render_widget(p.block(block), area);
     }
 
