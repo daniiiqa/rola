@@ -12,6 +12,7 @@ mod lrclib;
 mod mouse;
 mod mpris;
 mod mpv;
+mod scrobble;
 mod notif;
 mod palette;
 mod settings;
@@ -54,7 +55,8 @@ pub enum Ev {
     Stream { vid: String, format: &'static str, link: Option<stream::Link> },
     Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
     LoggedIn(Result<String, String>), // nombre del navegador, o por qué no
-    SpotifyIn(Result<String, String>),           // usuario de Spotify, o por qué no
+    SpotifyIn(Result<String, String>),
+    ScrobbleIn(Result<(String, String), String>), // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
@@ -109,6 +111,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// ListenBrainz: el token que se va pegando
+    Scrobble { input: String, busy: bool, err: Option<String> },
     /// rola wrapped: lo escuchado, por periodo (0 mes, 1 año, 2 siempre)
     Wrapped { period: usize, plays: Vec<stats::Play> },
     /// conectar Spotify: el Client ID que se va escribiendo
@@ -190,6 +194,8 @@ struct App {
     fade_in: Option<f64>,                 // la siguiente que se cargue entra subiendo en tantos s
     af_on: bool,                          // mpv tiene puesto el filtro de entrada
     listened: f64,                        // segundos oídos de verdad de la actual (sin saltos)
+    song_unix: i64,                       // cuándo empezó la actual (segundo unix)
+    lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -307,6 +313,8 @@ impl App {
             fade_in: None,
             af_on: false,
             listened: 0.0,
+            song_unix: 0,
+            lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -693,7 +701,11 @@ impl App {
         self.song_start = Instant::now();
         self.track_n += 1;
         self.splash = Some(Instant::now());
+        self.song_unix = unix_now();
         self.announce(i);
+        if let (Some((_, tx)), Some(it)) = (&self.lb, self.queue.get(i)) {
+            let _ = tx.send(scrobble::Job::Now(self.track_of(it)));
+        }
         // el fundido: la que entra sube desde cero; las demás, sin filtro
         let fade = self.fade_in.take();
         if fade.is_none() {
@@ -1104,6 +1116,9 @@ impl App {
             if matches!(popup, Popup::Wrapped { .. }) {
                 return self.wrapped_key(k);
             }
+            if matches!(popup, Popup::Scrobble { .. }) {
+                return self.scrobble_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -1306,6 +1321,22 @@ impl App {
                 }
                 Err(e) => {
                     if let Some(Popup::Spotify { busy, err, .. }) = &mut self.popup {
+                        *busy = false;
+                        *err = Some(e);
+                    }
+                }
+            },
+            Ev::ScrobbleIn(res) => match res {
+                Ok((token, user)) => {
+                    if let Err(e) = scrobble::save(&data_dir().join("listenbrainz.json"), &token, &user) {
+                        self.notify(e, true);
+                    }
+                    self.notify(fill(self.s().lb_connected, &[&user]), false);
+                    self.lb = Some((user, scrobble::start(token)));
+                    self.popup = None;
+                }
+                Err(e) => {
+                    if let Some(Popup::Scrobble { busy, err, .. }) = &mut self.popup {
                         *busy = false;
                         *err = Some(e);
                     }
@@ -1587,10 +1618,56 @@ impl App {
     /// Apunta la actual si se oyó lo bastante, y empieza la cuenta de nuevo.
     fn log_play(&mut self) {
         let secs = std::mem::take(&mut self.listened);
-        let Some(it) = self.current().filter(|_| secs >= stats::MIN_SECS) else { return };
-        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        let play = stats::Play { t: now, title: it.title.clone(), artist: it.artist.clone(), secs };
-        stats::log(&data_dir().join("history.jsonl"), &play, it.video_id.as_deref().unwrap_or(""));
+        let Some(it) = self.current() else { return };
+        if secs >= stats::MIN_SECS {
+            let play = stats::Play { t: unix_now(), title: it.title.clone(), artist: it.artist.clone(), secs };
+            stats::log(&data_dir().join("history.jsonl"), &play, it.video_id.as_deref().unwrap_or(""));
+        }
+        if let Some((_, tx)) = &self.lb {
+            if scrobble::counts(secs, self.dur) {
+                let _ = tx.send(scrobble::Job::Listen(self.track_of(it), self.song_unix));
+            }
+        }
+    }
+
+    fn track_of(&self, it: &Item) -> scrobble::Track {
+        scrobble::Track {
+            artist: it.artist.clone(),
+            title: it.title.clone(),
+            album: it.album.clone(),
+            secs: self.dur.or_else(|| parse_duration(&it.duration)),
+            url: it.link(),
+        }
+    }
+
+    fn scrobble_key(&mut self, k: KeyEvent) {
+        let Some(Popup::Scrobble { input, busy, err }) = &mut self.popup else { return };
+        if *busy {
+            return;
+        }
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc => self.popup = None,
+            KeyCode::Enter if !input.trim().is_empty() => {
+                *busy = true;
+                *err = None;
+                let (token, tx) = (input.trim().to_string(), self.tx.clone());
+                std::thread::spawn(move || {
+                    let res = scrobble::validate(&token).map(|user| (token, user));
+                    let _ = tx.send(Ev::ScrobbleIn(res));
+                });
+            }
+            KeyCode::Char('d') if ctrl && self.lb.is_some() => {
+                let _ = std::fs::remove_file(data_dir().join("listenbrainz.json"));
+                self.lb = None;
+                self.popup = None;
+                self.notify(self.s().lb_disconnected, false);
+            }
+            KeyCode::Char('u') if ctrl => input.clear(),
+            KeyCode::Backspace => drop(input.pop()),
+            KeyCode::Char(c) if !ctrl => input.push(c),
+            _ => {}
+        }
     }
 
     fn open_wrapped(&mut self) {
@@ -1965,6 +2042,10 @@ fn base64(data: &[u8]) -> String {
         }
     }
     out
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 /// "3:45" / "1:02:03" → segundos.

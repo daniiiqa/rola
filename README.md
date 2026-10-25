@@ -125,6 +125,14 @@ cuántos días seguidos llevas; este mes, este año o desde siempre (`h`/`l`).
 rola apunta cada canción que oyes al menos 30 s en
 `~/.local/share/rola/history.jsonl`. No sale de tu equipo.
 
+## ListenBrainz
+
+`o` → ListenBrainz: pega tu «User token» de
+[listenbrainz.org/settings](https://listenbrainz.org/settings) y lo que escuchas
+va a tu perfil («sonando ahora» y cada canción oída a la mitad, o 4 minutos).
+Sin conexión, se reintenta luego. El token queda en
+`~/.local/share/rola/listenbrainz.json` (0600).
+
 ## Colores de la portada
 
 `o` → «Colores de la portada»: el color principal y el de acento salen de la

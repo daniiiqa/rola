@@ -317,6 +317,7 @@ impl App {
             Some(Popup::Login { .. }) => self.draw_login(f),
             Some(Popup::Spotify { .. }) => self.draw_spotify(f),
             Some(Popup::Wrapped { period, plays }) => self.draw_wrapped(f, *period, plays),
+            Some(Popup::Scrobble { .. }) => self.draw_scrobble(f),
             None => {}
         }
     }
@@ -910,6 +911,45 @@ impl App {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 
+    fn draw_scrobble(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::Scrobble { input, busy, err }) = &self.popup else { return };
+        let mut lines: Vec<Line> = Vec::new();
+        if let Some((user, _)) = &self.lb {
+            lines.push(Line::styled(fill(s.lb_connected, &[user]), Style::new().fg(t.primary)));
+            lines.push(Line::styled(self.tx(s.sp_disconnect_hint), Style::new().fg(t.muted)));
+            lines.push(Line::raw(""));
+        }
+        for (i, l) in s.lb_steps.iter().enumerate() {
+            lines.push(Line::styled(*l, Style::new().fg(if i == 0 { t.muted } else { t.fg })));
+        }
+        lines.push(Line::raw(""));
+        // el token no se enseña entero: solo sus 4 últimas
+        let n = input.chars().count();
+        let shown: String = "•".repeat(n.saturating_sub(4)) + &input.chars().skip(n.saturating_sub(4)).collect::<String>();
+        lines.push(Line::from(vec![
+            Span::styled("Token: ", Style::new().fg(t.primary).bold()),
+            Span::styled(shown, Style::new().fg(t.fg)),
+            Span::styled(if *busy { "" } else { "▏" }, Style::new().fg(t.primary)),
+        ]));
+        if *busy {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(self.tx(s.lb_busy), Style::new().fg(t.primary).italic()));
+        } else if let Some(e) = err {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(e.clone(), Style::new().fg(t.accent)));
+        }
+        let w = 78.min(f.area().width.saturating_sub(4));
+        let h: u16 = lines.iter().map(|l| (l.width() as u16).div_ceil(w.saturating_sub(4).max(1)).max(1)).sum();
+        let area = self.popup_area(f, w, h + 2);
+        self.hits.borrow_mut().popup = area;
+        let block = self
+            .block(true)
+            .title(Line::styled(" ListenBrainz ", Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+    }
+
     fn draw_search(&self, f: &mut Frame, area: Rect) {
         let t = self.theme;
         let focused = self.focus == Focus::Search;
@@ -1213,6 +1253,7 @@ impl App {
             (Some(Popup::Login { .. }), _) => s.foot_login,
             (Some(Popup::Spotify { .. }), _) => s.foot_spotify,
             (Some(Popup::Wrapped { .. }), _) => s.foot_wrapped,
+            (Some(Popup::Scrobble { .. }), _) => s.foot_spotify,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
