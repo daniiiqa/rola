@@ -118,6 +118,14 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Modo fiesta
+
+`F`: rola se vuelve una rocola. Sale un QR (y el enlace) para que los demás,
+en tu misma wifi, abran una página en el móvil: ven qué suena y qué viene, y
+buscan y añaden canciones a la cola (con su nombre: «Ana puso…»). Solo
+mientras está encendido y solo con el código del enlace; cada móvil puede
+añadir 5 por minuto. `Esc` oculta el QR, `F` otra vez apaga la fiesta.
+
 ## rola wrapped
 
 `W`: cuánto has escuchado, tus artistas y canciones de cabecera, a qué horas y

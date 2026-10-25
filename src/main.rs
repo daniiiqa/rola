@@ -15,6 +15,7 @@ mod mpv;
 mod scrobble;
 mod notif;
 mod palette;
+mod party;
 mod settings;
 mod spotify;
 mod stats;
@@ -56,7 +57,8 @@ pub enum Ev {
     Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
     LoggedIn(Result<String, String>), // nombre del navegador, o por qué no
     SpotifyIn(Result<String, String>),
-    ScrobbleIn(Result<(String, String), String>), // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
+    ScrobbleIn(Result<(String, String), String>),
+    Party(party::Req), // lo que piden desde la página de la fiesta // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
@@ -111,6 +113,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// modo fiesta: el QR y el enlace
+    Party,
     /// ListenBrainz: el token que se va pegando
     Scrobble { input: String, busy: bool, err: Option<String> },
     /// rola wrapped: lo escuchado, por periodo (0 mes, 1 año, 2 siempre)
@@ -195,6 +199,7 @@ struct App {
     af_on: bool,                          // mpv tiene puesto el filtro de entrada
     listened: f64,                        // segundos oídos de verdad de la actual (sin saltos)
     song_unix: i64,                       // cuándo empezó la actual (segundo unix)
+    party: Option<party::Party>,          // modo fiesta encendido
     lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
     popup: Option<Popup>,
     picker: Picker,
@@ -314,6 +319,7 @@ impl App {
             af_on: false,
             listened: 0.0,
             song_unix: 0,
+            party: None,
             lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
             popup: None,
             picker,
@@ -1119,6 +1125,9 @@ impl App {
             if matches!(popup, Popup::Scrobble { .. }) {
                 return self.scrobble_key(k);
             }
+            if matches!(popup, Popup::Party) {
+                return self.party_popup_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -1342,6 +1351,7 @@ impl App {
                     }
                 }
             },
+            Ev::Party(req) => self.party_req(req),
             Ev::Matched { sp, vid } => self.matched(sp, vid),
             Ev::Cover { vid, img, pal } => {
                 if let Some((v, c)) = &mut self.cover {
@@ -1548,6 +1558,7 @@ impl App {
             KeyCode::Char('t') => self.cycle_sleep(),
             KeyCode::Char('Y') => self.copy_link(),
             KeyCode::Char('W') => self.open_wrapped(),
+            KeyCode::Char('F') => self.party_key(),
             _ => {}
         }
     }
@@ -1681,6 +1692,61 @@ impl App {
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => *period = (*period + 1) % 3,
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => *period = (*period + 2) % 3,
             _ => self.popup = None,
+        }
+    }
+
+    // ── modo fiesta ──
+    /// F: la enciende (y enseña el QR); encendida, enseña el QR otra vez.
+    fn party_key(&mut self) {
+        if self.party.is_none() {
+            match party::start(self.api.clone(), self.tx.clone()) {
+                Ok(p) => self.party = Some(p),
+                Err(e) => return self.notify(e, true),
+            }
+        }
+        self.popup = Some(Popup::Party);
+    }
+
+    fn party_popup_key(&mut self, k: KeyEvent) {
+        self.popup = None;
+        if k.code == KeyCode::Char('F') {
+            self.party = None; // al soltarla, el servidor se para
+            self.notify(self.s().party_off, false);
+        }
+    }
+
+    fn party_req(&mut self, req: party::Req) {
+        match req {
+            party::Req::State(reply) => {
+                let hex = |c: Color| match c {
+                    Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+                    _ => None,
+                };
+                let song = |x: &Item| json!({ "title": x.title, "artist": x.artist, "thumb": x.cover_url() });
+                let next: Vec<Value> = self.qi.map_or(Vec::new(), |q| self.queue.iter().skip(q + 1).take(10).map(song).collect());
+                let _ = reply.send(json!({
+                    "now": self.current().map(song),
+                    "playing": self.playing(),
+                    "next": next,
+                    "colors": hex(self.theme.primary).zip(hex(self.theme.accent)).map(|(p, a)| json!({ "primary": p, "accent": a })),
+                }));
+            }
+            party::Req::Add { item, by } => {
+                let who = if by.trim().is_empty() { self.s().party_someone.to_string() } else { by };
+                self.notify(fill(self.s().party_added, &[&who, &item.title]), false);
+                // como z: detrás de la actual y de las ya añadidas
+                match self.qi {
+                    None => {
+                        self.queue = vec![item];
+                        self.play_index(0);
+                    }
+                    Some(qi) => {
+                        self.added += 1;
+                        let at = (qi + self.added).min(self.queue.len());
+                        self.queue.insert(at, item);
+                    }
+                }
+            }
         }
     }
 

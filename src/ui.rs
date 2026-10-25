@@ -318,6 +318,7 @@ impl App {
             Some(Popup::Spotify { .. }) => self.draw_spotify(f),
             Some(Popup::Wrapped { period, plays }) => self.draw_wrapped(f, *period, plays),
             Some(Popup::Scrobble { .. }) => self.draw_scrobble(f),
+            Some(Popup::Party) => self.draw_party(f),
             None => {}
         }
     }
@@ -911,6 +912,30 @@ impl App {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 
+    /// El QR (en blanco y negro de verdad, para que el móvil lo lea en
+    /// cualquier tema) y el enlace.
+    fn draw_party(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(p) = &self.party else { return };
+        let code = crate::party::qr(&p.url);
+        let qr_st = Style::new().fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(0, 0, 0));
+        let mut lines = vec![Line::styled(self.tx(s.party_scan), Style::new().fg(t.fg)), Line::raw("")];
+        lines.extend(code.iter().map(|r| Line::styled(r.clone(), qr_st).centered()));
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(p.url.clone(), Style::new().fg(t.primary).bold()).centered());
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(self.tx(s.party_hint), Style::new().fg(t.muted)).centered());
+        let qw = code.first().map_or(0, |r| r.chars().count()) as u16;
+        let w = (qw.max(p.url.len() as u16).max(Line::raw(s.party_scan).width() as u16) + 6).min(f.area().width.saturating_sub(2));
+        let area = self.popup_area(f, w, lines.len() as u16 + 2);
+        self.hits.borrow_mut().popup = area;
+        let block = self
+            .block(true)
+            .title(Line::styled(format!(" {} ", self.tx(s.party_title)), Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
     fn draw_scrobble(&self, f: &mut Frame) {
         let (t, s) = (self.theme, self.s());
         let Some(Popup::Scrobble { input, busy, err }) = &self.popup else { return };
@@ -1170,6 +1195,10 @@ impl App {
         if let Some(left) = left {
             flags.spans.push(Span::styled(format!("{gap}{} {left}", self.ic("\u{f04b2}", "zz")), Style::new().fg(t.accent)));
         }
+        // la fiesta encendida
+        if self.party.is_some() {
+            flags.spans.push(Span::styled(format!("{gap}{}", self.ic3("\u{f0849}", "party", self.s().party_word)), Style::new().fg(t.accent).bold()));
+        }
         let [left, right] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(flags.width() as u16 + 1)]).areas(top);
         {
@@ -1254,6 +1283,7 @@ impl App {
             (Some(Popup::Spotify { .. }), _) => s.foot_spotify,
             (Some(Popup::Wrapped { .. }), _) => s.foot_wrapped,
             (Some(Popup::Scrobble { .. }), _) => s.foot_spotify,
+            (Some(Popup::Party), _) => s.foot_party,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
