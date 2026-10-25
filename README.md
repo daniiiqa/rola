@@ -4,7 +4,9 @@
 abre, rola mueve solo las carpetas de `ytm` a las suyas.)
 
 YouTube Music en la terminal, al estilo spotify-tui. Rust + ratatui; el audio
-lo pone mpv (con mpv-mpris sale en waybar/playerctl). Habla directo con la API
+lo pone mpv. Sale por MPRIS como «rola», así que las teclas multimedia, playerctl,
+waybar y los auriculares bluetooth manejan su cola (siguiente, anterior, pausa,
+posición, volumen, aleatorio, repetir). Habla directo con la API
 interna de YouTube Music, sin runtime ni librerías de Python.
 
 ## Instalar
