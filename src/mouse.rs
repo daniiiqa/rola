@@ -63,7 +63,7 @@ impl App {
         if inside(h.side, x, y) {
             self.side_move(d);
         } else if inside(h.rows, x, y) {
-            self.table_move(d * 3);
+            self.table_move(d);
         } else if inside(h.lyrics, x, y) {
             self.lyrics_scroll(d * 3);
         } else if inside(h.bar, x, y) {
