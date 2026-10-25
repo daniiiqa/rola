@@ -16,9 +16,14 @@ sudo pacman -S --needed mpv yt-dlp
 cargo install --path . --root ~/.local --force   # deja ~/.local/bin/rola
 ```
 
-`rola --login` conecta tu cuenta (me gusta, historial, playlists, álbumes,
-artistas); sin login funcionan búsqueda e inicio. La cookie queda en
-`~/.local/share/rola/auth.json` (0600).
+Tu cuenta (me gusta, historial, playlists, álbumes, artistas) se conecta con
+la sesión que ya tienes en el navegador: entra en music.youtube.com allí y, al
+abrir rola, elige el navegador (o `o` → Cuenta, o `rola --login`). Firefox, Zen,
+LibreWolf, Floorp, Waterfox, Chrome, Chromium, Brave, Vivaldi, Edge y Opera;
+las cookies las lee yt-dlp, rola se queda solo con las de youtube.com en
+`~/.local/share/rola/auth.json` (0600) y, si caducan, las vuelve a tomar del
+mismo navegador. Si no hay manera, `rola --login` deja pegar los encabezados a
+mano. Sin cuenta funcionan búsqueda e inicio.
 
 La portada de lo que suena sale al pie de la barra lateral: en kitty (o
 cualquier terminal con kitty graphics, sixel o iTerm2) como imagen de verdad,

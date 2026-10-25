@@ -7,6 +7,7 @@ mod api;
 mod config;
 mod hypr;
 mod i18n;
+mod login;
 mod mouse;
 mod mpris;
 mod mpv;
@@ -45,6 +46,7 @@ pub enum Ev {
     Notify(String, bool),
     Stream { vid: String, format: &'static str, link: Option<stream::Link> },
     Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
+    LoggedIn(Result<String, String>), // nombre del navegador, o por qué no
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
 }
 
@@ -80,6 +82,8 @@ pub enum Popup {
     Help,
     Settings { sel: usize },
     AddTo { item: Item, state: ListState },
+    /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
+    Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -165,6 +169,7 @@ struct App {
     last_click: Option<(Instant, u16, u16)>,
     mpris: Option<mpris::Mpris>,
     track_n: u64, // sube con cada canción que se pone (para MPRIS)
+    login_skipped: bool, // dijo «luego» al aviso de conectar la cuenta
 }
 
 /// Lo que dura el aviso de canción nueva.
@@ -261,6 +266,7 @@ impl App {
             last_click: None,
             mpris: mpris::Mpris::start(tx.clone()),
             track_n: 0,
+            login_skipped: st["login_skipped"].as_bool().unwrap_or(false),
         };
         app.fill_side(&[]);
         if !app.cfg.restore {
@@ -282,6 +288,18 @@ impl App {
     }
 
     fn start(mut self) -> App {
+        self.load_account();
+        // sin cuenta: ofrecer entrar desde el navegador (una vez; luego, en ajustes)
+        if !self.api.authed() && !self.login_skipped && !login::browsers().is_empty() {
+            self.open_login();
+        }
+        self
+    }
+
+    /// Lo que depende de la cuenta: playlists de la barra lateral e inicio.
+    fn load_account(&mut self) {
+        self.playlists.clear();
+        self.fill_side(&[]);
         if self.api.authed() {
             let (api, tx) = (self.api.clone(), self.tx.clone());
             std::thread::spawn(move || match api.library_playlists() {
@@ -290,7 +308,66 @@ impl App {
             });
         }
         self.open(self.s().home, Load::Home, true);
-        self
+    }
+
+    // ── cuenta ──
+    pub fn open_login(&mut self) {
+        let browsers = login::browsers();
+        if browsers.is_empty() && !self.api.authed() {
+            return self.notify(self.s().login_none, true);
+        }
+        let state = ListState::default().with_selected(Some(0));
+        self.popup = Some(Popup::Login { browsers, state, busy: None, err: None });
+    }
+
+    fn login_key(&mut self, k: KeyEvent) {
+        let authed = self.api.authed();
+        let Some(Popup::Login { browsers, state, busy, err }) = &mut self.popup else { return };
+        if busy.is_some() {
+            return; // leyendo; enseguida acaba
+        }
+        let n = browsers.len() + authed as usize; // la última fila: cerrar sesión
+        let i = state.selected().unwrap_or(0);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.popup = None;
+                self.login_skipped |= !authed;
+            }
+            KeyCode::Char('j') | KeyCode::Down => state.select(Some((i + 1).min(n.saturating_sub(1)))),
+            KeyCode::Char('k') | KeyCode::Up => state.select(Some(i.saturating_sub(1))),
+            KeyCode::Enter => match browsers.get(i).cloned() {
+                Some(b) => {
+                    *busy = Some(b.name.to_string());
+                    *err = None;
+                    let (tx, file, s) = (self.tx.clone(), data_dir().join("auth.json"), self.s());
+                    std::thread::spawn(move || {
+                        let res = login::import(&b.arg)
+                            .and_then(|v| login::save(&file, &v))
+                            .map(|_| b.name.to_string())
+                            .map_err(|e| if e.is_empty() { fill(s.login_no_session, &[b.name]) } else { e });
+                        let _ = tx.send(Ev::LoggedIn(res));
+                    });
+                }
+                None if authed => {
+                    let _ = std::fs::remove_file(data_dir().join("auth.json"));
+                    self.api.reload();
+                    self.popup = None;
+                    self.notify(self.s().logged_out, false);
+                    self.load_account();
+                }
+                None => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Cómo sale la cuenta en los ajustes.
+    pub fn account_name(&self) -> String {
+        match (self.api.authed(), self.api.browser()) {
+            (false, _) => self.s().account_none.into(),
+            (true, Some(b)) => login::name_of(&b),
+            (true, None) => self.s().account_pasted.into(),
+        }
     }
 
     pub fn s(&self) -> &'static Strings {
@@ -305,6 +382,7 @@ impl App {
             "autoplay": self.autoplay,
             "lyrics": self.lyrics_on,
             "cover": self.cover_on,
+            "login_skipped": self.login_skipped,
             "queue": self.queue.iter().map(Item::to_json).collect::<Vec<_>>(),
             "qi": self.qi,
             "pos": if self.loaded { self.pos } else { self.resume.as_ref().map(|r| r.1) },
@@ -714,6 +792,9 @@ impl App {
             if matches!(popup, Popup::Settings { .. }) {
                 return self.settings_key(k);
             }
+            if matches!(popup, Popup::Login { .. }) {
+                return self.login_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -928,6 +1009,21 @@ impl App {
                     self.upgrade_when_ready(vid, l);
                 }
             }
+            Ev::LoggedIn(res) => match res {
+                Ok(name) => {
+                    self.api.reload();
+                    self.popup = None;
+                    self.login_skipped = false;
+                    self.notify(fill(self.s().login_done, &[&name]), false);
+                    self.load_account();
+                }
+                Err(e) => {
+                    if let Some(Popup::Login { busy, err, .. }) = &mut self.popup {
+                        *busy = None;
+                        *err = Some(e);
+                    }
+                }
+            },
             Ev::Ready(vid) if self.upgrade.as_ref() == Some(&vid) => self.do_upgrade(&vid),
             Ev::Ready(vid) => {
                 if let Some((w, start)) = self.waiting.take_if(|(w, _)| *w == vid) {
@@ -1370,6 +1466,16 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
 
 fn login() {
     let s = Config::load().lang.s();
+    let file = data_dir().join("auth.json");
+    for b in login::browsers() {
+        println!("{}", fill(s.login_cli_try, &[b.name]));
+        match login::import(&b.arg).and_then(|v| login::save(&file, &v)) {
+            Ok(()) => return login_test(&file),
+            Err(e) if e.is_empty() => println!("  {}", fill(s.login_no_session, &[b.name])),
+            Err(e) => println!("  {e}"),
+        }
+    }
+    println!("{}", s.login_cli_paste);
     println!("{}", s.login_intro);
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
@@ -1377,15 +1483,17 @@ fn login() {
         eprintln!("{}", s.login_no_cookie);
         std::process::exit(1);
     };
-    let dir = data_dir();
-    let file = dir.join("auth.json");
-    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, auth.to_string())) {
-        eprintln!("{}", fill(s.login_save_failed, &[&file.display().to_string(), &e.to_string()]));
+    if let Err(e) = login::save(&file, &auth) {
+        eprintln!("{}", fill(s.login_save_failed, &[&file.display().to_string(), &e]));
         std::process::exit(1);
     }
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
-    match Api::new(&file).library_playlists() {
+    login_test(&file);
+}
+
+/// Prueba la sesión recién guardada pidiendo las playlists.
+fn login_test(file: &std::path::Path) {
+    let s = Config::load().lang.s();
+    match Api::new(file).library_playlists() {
         Ok(p) => println!("{}", fill(s.login_ok, &[&p.len().to_string(), &file.display().to_string()])),
         Err(e) => println!("{}", fill(s.login_test_failed, &[&file.display().to_string(), &e])),
     }

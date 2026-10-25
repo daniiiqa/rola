@@ -8,6 +8,7 @@ use serde_json::json;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Setting {
+    Account,
     Lang,
     Restore,
     Mouse,
@@ -36,7 +37,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify]),
+    (|s| s.sec_general, &[Setting::Account, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify]),
     (
         |s| s.sec_look,
         &[
@@ -65,6 +66,7 @@ pub fn all() -> impl Iterator<Item = Setting> {
 impl Setting {
     pub fn label(self, s: &Strings) -> &'static str {
         match self {
+            Setting::Account => s.set_account,
             Setting::Lang => s.set_lang,
             Setting::Restore => s.set_restore,
             Setting::Mouse => s.set_mouse,
@@ -111,7 +113,7 @@ impl Setting {
             Setting::Quality => "quality",
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
-            Setting::Cover | Setting::Autoplay => return None,
+            Setting::Account | Setting::Cover | Setting::Autoplay => return None,
         })
     }
 }
@@ -125,6 +127,7 @@ impl App {
         let (c, s) = (&self.cfg, self.s());
         let yn = |b: bool| if b { s.on } else { s.off }.to_string();
         match k {
+            Setting::Account => self.account_name(),
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
             Setting::Mouse => yn(c.mouse),
@@ -154,8 +157,15 @@ impl App {
     }
 
     fn change(&mut self, k: Setting, d: isize) {
+        if k == Setting::Account {
+            // los ajustes se guardan aquí: el popup de la cuenta los sustituye
+            let _ = self.cfg.save();
+            self.cfg_mtimes = config::mtimes();
+            return self.open_login();
+        }
         let c = &mut self.cfg;
         match k {
+            Setting::Account => {}
             Setting::Lang => {
                 let old = c.lang;
                 c.lang = c.lang.step(d);

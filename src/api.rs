@@ -4,9 +4,9 @@
 //! la respuesta entera buscando los renderers que pintan filas y tarjetas.
 
 use serde_json::{json, Value};
-use std::path::Path;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ORIGIN: &str = "https://music.youtube.com";
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
@@ -112,37 +112,111 @@ struct Auth {
     cookie: String,
     authuser: String,
     sapisid: String,
+    browser: Option<String>, // de dónde salió, para renovarla sola
+}
+
+impl Auth {
+    fn from_json(v: &Value) -> Option<Auth> {
+        let cookie = v["cookie"].as_str()?.to_string();
+        let sapisid = sapisid_of(&cookie)?;
+        let authuser = v["authuser"].as_str().unwrap_or("0").to_string();
+        Some(Auth { cookie, authuser, sapisid, browser: v["browser"].as_str().map(String::from) })
+    }
 }
 
 #[derive(Clone)]
 pub struct Api {
     agent: ureq::Agent,
-    auth: Option<Arc<Auth>>,
+    // compartida entre los hilos: si uno la renueva, la usan todos
+    auth: Arc<Mutex<Option<Arc<Auth>>>>,
+    file: PathBuf,
+    renewed: Arc<Mutex<Option<Instant>>>,
+}
+
+/// Con la cookie caducada YouTube no da error: contesta como a un anónimo.
+fn logged_out(v: &Value) -> bool {
+    v["responseContext"]["serviceTrackingParams"].as_array().into_iter().flatten().any(|p| {
+        p["params"].as_array().into_iter().flatten().any(|kv| kv["key"] == "logged_in" && kv["value"] == "0")
+    })
 }
 
 impl Api {
     pub fn new(auth_file: &Path) -> Api {
-        let auth = std::fs::read_to_string(auth_file)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| {
-                let cookie = v["cookie"].as_str()?.to_string();
-                let sapisid = sapisid_of(&cookie)?;
-                let authuser = v["authuser"].as_str().unwrap_or("0").to_string();
-                Some(Arc::new(Auth { cookie, authuser, sapisid }))
-            });
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(20))
             .user_agent(UA)
             .build();
-        Api { agent, auth }
+        let api = Api { agent, auth: Arc::default(), file: auth_file.to_path_buf(), renewed: Arc::default() };
+        api.reload();
+        api
+    }
+
+    /// ¿YouTube da por buena esta sesión? (sin guardarla ni renovarla)
+    pub fn check(&self, auth: &Value) -> Result<bool, String> {
+        let Some(a) = Auth::from_json(auth) else { return Ok(false) };
+        let v = self.send("browse", json!({ "browseId": "FEmusic_home" }), Some(&a)).map_err(|(_, e)| e)?;
+        Ok(!logged_out(&v))
+    }
+
+    /// Vuelve a leer auth.json (tras entrar o salir desde la app).
+    pub fn reload(&self) {
+        let auth = std::fs::read_to_string(&self.file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .and_then(|v| Auth::from_json(&v))
+            .map(Arc::new);
+        *self.auth.lock().unwrap_or_else(|e| e.into_inner()) = auth;
+    }
+
+    fn current(&self) -> Option<Arc<Auth>> {
+        self.auth.lock().ok().and_then(|a| a.clone())
     }
 
     pub fn authed(&self) -> bool {
-        self.auth.is_some()
+        self.current().is_some()
     }
 
-    fn post(&self, endpoint: &str, mut body: Value) -> Result<Value, String> {
+    /// El navegador del que sale la sesión (None: pegada a mano o sin cuenta).
+    pub fn browser(&self) -> Option<String> {
+        self.current().and_then(|a| a.browser.clone())
+    }
+
+    /// Cookies nuevas del mismo navegador; true si hay otras que probar.
+    fn renew(&self, old: &Arc<Auth>) -> bool {
+        let Ok(mut last) = self.renewed.lock() else { return false };
+        // otro hilo ya la renovó mientras esperábamos
+        if self.current().is_some_and(|a| !Arc::ptr_eq(&a, old)) {
+            return true;
+        }
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(600)) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        let Some(b) = &old.browser else { return false };
+        let Ok(v) = crate::login::import(b) else { return false };
+        if crate::login::save(&self.file, &v).is_err() {
+            return false;
+        }
+        self.reload();
+        true
+    }
+
+    fn post(&self, endpoint: &str, body: Value) -> Result<Value, String> {
+        let auth = self.current();
+        let res = self.send(endpoint, body.clone(), auth.as_deref());
+        // sesión caducada: si vino de un navegador, se renueva y otra vez
+        let stale = match &res {
+            Ok(v) => logged_out(v),
+            Err((code, _)) => matches!(code, Some(401 | 403)),
+        };
+        let res = match &auth {
+            Some(a) if stale && a.browser.is_some() && self.renew(a) => self.send(endpoint, body, self.current().as_deref()),
+            _ => res,
+        };
+        res.map_err(|(_, e)| e)
+    }
+
+    fn send(&self, endpoint: &str, mut body: Value, auth: Option<&Auth>) -> Result<Value, (Option<u16>, String)> {
         body["context"] = json!({
             "client": {"clientName": "WEB_REMIX", "clientVersion": client_version(), "hl": "en"},
             "user": {},
@@ -153,7 +227,7 @@ impl Api {
             .set("content-type", "application/json")
             .set("origin", ORIGIN)
             .set("x-origin", ORIGIN);
-        if let Some(a) = &self.auth {
+        if let Some(a) = auth {
             req = req
                 .set("cookie", &a.cookie)
                 .set("x-goog-authuser", &a.authuser)
@@ -167,12 +241,12 @@ impl Api {
                     .and_then(|s| serde_json::from_str::<Value>(&s).ok())
                     .and_then(|v| v["error"]["message"].as_str().map(String::from))
                     .unwrap_or_default();
-                format!("HTTP {code} {msg}")
+                (Some(code), format!("HTTP {code} {msg}"))
             }
-            e => e.to_string(),
+            e => (None, e.to_string()),
         })?;
-        let text = resp.into_string().map_err(|e| e.to_string())?;
-        serde_json::from_str(&text).map_err(|e| e.to_string())
+        let text = resp.into_string().map_err(|e| (None, e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| (None, e.to_string()))
     }
 
     /// browse + continuaciones (playlists largas, me gusta…), hasta `pages` extra.

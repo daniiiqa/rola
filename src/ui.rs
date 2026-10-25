@@ -219,6 +219,7 @@ impl App {
             Some(Popup::Help) => self.draw_help(f),
             Some(Popup::Settings { sel }) => self.draw_settings(f, *sel),
             Some(Popup::AddTo { .. }) => self.draw_add_to(f),
+            Some(Popup::Login { .. }) => self.draw_login(f),
             None => {}
         }
     }
@@ -377,6 +378,46 @@ impl App {
             let off = state.offset();
             hits.popup_rows = (0..h.saturating_sub(2)).map(|k| (area.y + 1 + k, off + k as usize)).filter(|&(_, i)| i < pls.len()).collect();
         }
+    }
+
+    fn draw_login(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::Login { browsers, state, busy, err }) = &self.popup else { return };
+        let sel = state.selected().unwrap_or(0);
+        let (hl, mark) = self.sel(true);
+        let mut names: Vec<String> = browsers.iter().map(|b| b.name.to_string()).collect();
+        if self.api.authed() {
+            names.push(self.tx(s.logout));
+        }
+        let mut lines = vec![Line::styled(self.tx(s.login_pick), Style::new().fg(t.muted)), Line::raw("")];
+        let first = lines.len();
+        for (i, n) in names.iter().enumerate() {
+            lines.push(if i == sel {
+                Line::styled(format!("{mark}{n}"), hl)
+            } else {
+                Line::styled(format!("{}{n}", " ".repeat(mark.chars().count())), Style::new().fg(t.fg))
+            });
+        }
+        if let Some(b) = busy {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(fill(s.login_busy, &[b]), Style::new().fg(t.primary).italic()));
+        } else if let Some(e) = err {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(e.clone(), Style::new().fg(t.accent)));
+        }
+        let w = 64.min(f.area().width.saturating_sub(4));
+        let wrapped: u16 = lines.iter().map(|l| (l.width() as u16).div_ceil(w.saturating_sub(4).max(1)).max(1)).sum();
+        let area = self.popup_area(f, w, wrapped + 2);
+        {
+            let mut hits = self.hits.borrow_mut();
+            hits.popup = area;
+            hits.popup_rows = (0..names.len()).map(|i| (area.y + 1 + (first + i) as u16, i)).collect();
+        }
+        let block = self
+            .block(true)
+            .title(Line::styled(format!(" {} ", self.tx(s.login_title)), Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 
     fn draw_search(&self, f: &mut Frame, area: Rect) {
@@ -647,6 +688,7 @@ impl App {
             (Some(Popup::AddTo { .. }), _) => s.foot_add,
             (Some(Popup::Help), _) => s.foot_help,
             (Some(Popup::Settings { .. }), _) => s.foot_settings,
+            (Some(Popup::Login { .. }), _) => s.foot_login,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
