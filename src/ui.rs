@@ -48,6 +48,41 @@ const ROCOLA: [&str; 22] = [
 ];
 const LOGO_ASCII: [&str; 4] = [" _ __ ___ | | __ _ ", "| '__/ _ \\| |/ _` |", "| | | (_) | | (_| |", "|_|  \\___/|_|\\__,_|"];
 
+/// Parte `s` en filas de hasta `w` columnas, por palabras (y a la fuerza
+/// si una sola no cabe).
+fn wrap(s: &str, w: usize) -> Vec<String> {
+    let width = |s: &str| Span::raw(s).width();
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for word in s.split(' ') {
+        if !cur.is_empty() && width(&cur) + 1 + width(word) > w {
+            out.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(word);
+        while width(&cur) > w {
+            let mut head = String::new();
+            for ch in cur.chars() {
+                if width(&head) + width(&ch.to_string()) > w {
+                    break;
+                }
+                head.push(ch);
+            }
+            if head.is_empty() {
+                break;
+            }
+            cur = cur[head.len()..].to_string();
+            out.push(head);
+        }
+    }
+    if !cur.is_empty() || out.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 /// De `a` a `b` (0..=1); si alguno no es RGB (colores de la terminal), `a`.
 fn mix(a: Color, b: Color, k: f64) -> Color {
     match (a, b) {
@@ -315,30 +350,8 @@ impl App {
                 text.lines().map(|l| Line::styled(l.to_string(), Style::new().fg(t.fg))).collect()
             }
             Some((_, Lyrics::Synced(lines, source))) => {
-                block = block.title_bottom(Line::styled(format!(" {source} "), Style::new().fg(t.muted)).right_aligned());
-                // la que suena: la última que ya empezó (un pelín antes, que se lee tarde)
-                let pos = self.pos.unwrap_or(0.0) + 0.2;
-                let cur = lines.iter().rposition(|(at, _)| *at <= pos);
-                let out: Vec<Line> = lines
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (_, l))| {
-                        // los huecos sin letra (solos instrumentales) con una nota
-                        let l = if l.is_empty() { "♪".to_string() } else { l.clone() };
-                        let st = match cur {
-                            Some(c) if c == i => Style::new().fg(t.primary).bold(),
-                            Some(c) if i < c => Style::new().fg(t.muted),
-                            _ => Style::new().fg(t.fg),
-                        };
-                        Line::styled(l, st)
-                    })
-                    .collect();
-                // que la que suena quede a un tercio de arriba
-                let inner = block.inner(area);
-                let w = inner.width.max(1) as usize;
-                let above: usize = out[..cur.unwrap_or(0)].iter().map(|l| l.width().max(1).div_ceil(w)).sum();
-                self.lyrics_auto.set(above.saturating_sub(inner.height as usize / 3) as u16);
-                out
+                let block = block.title_bottom(Line::styled(format!(" {source} "), Style::new().fg(t.muted)).right_aligned());
+                return self.draw_synced(f, area, block, lines);
             }
             Some((_, Lyrics::Missing)) => vec![Line::styled(self.tx(s.no_lyrics), muted)],
             Some((_, Lyrics::Err(e))) => vec![Line::styled(fill(s.load_failed, &[e]), Style::new().fg(t.accent))],
@@ -348,6 +361,74 @@ impl App {
         let scroll = if self.following_lyrics() { self.lyrics_auto.get() } else { self.lyrics_scroll };
         let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((scroll, 0));
         f.render_widget(p.block(block), area);
+    }
+
+    /// La letra con tiempos: lo cantado apagado, la que suena llenándose
+    /// como en el karaoke y lo que viene normal. Cada fila guarda su segundo,
+    /// así un clic en ella salta ahí.
+    fn draw_synced(&self, f: &mut Frame, area: Rect, block: Block, lines: &[(f64, String)]) {
+        let t = self.theme;
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        self.hits.borrow_mut().lyrics = area;
+        // la que suena: la última que ya empezó (un pelín antes, que se lee tarde)
+        let pos = self.pos.unwrap_or(0.0) + 0.2;
+        let cur = lines.iter().rposition(|(at, _)| *at <= pos);
+        // cuánto se ha cantado: la línea dura hasta la siguiente, pero sin
+        // estirarse en los silencios (lo que se tarda en decirla, más o menos)
+        let sung = cur.map_or(0.0, |c| {
+            let (at, l) = &lines[c];
+            let next = lines.get(c + 1).map_or(at + 4.0, |n| n.0);
+            let dur = (next - at).min(l.chars().count() as f64 * 0.11 + 0.6).max(0.3);
+            ((pos - at) / dur).clamp(0.0, 1.0)
+        });
+        // el ajuste de líneas, hecho aquí: así se sabe qué fila es de qué línea
+        let w = inner.width.max(1) as usize;
+        let mut rows: Vec<(usize, String, usize)> = Vec::new(); // (línea, texto, letras antes en su línea)
+        let mut len = vec![0; lines.len()];
+        for (i, (_, l)) in lines.iter().enumerate() {
+            // los huecos sin letra (solos instrumentales) con una nota
+            let l = if l.is_empty() { "♪" } else { l };
+            for r in wrap(l, w) {
+                let n = r.chars().count();
+                rows.push((i, r, len[i]));
+                len[i] += n;
+            }
+        }
+        self.lyrics_total.set(rows.len() as u16);
+        let first = cur.and_then(|c| rows.iter().position(|r| r.0 == c)).unwrap_or(0);
+        // que la que suena quede a un tercio de arriba
+        let auto = first.saturating_sub(inner.height as usize / 3);
+        self.lyrics_auto.set(auto as u16);
+        let scroll = if self.following_lyrics() { auto } else { self.lyrics_scroll as usize };
+        let mut at = Vec::new();
+        let out: Vec<Line> = rows
+            .iter()
+            .skip(scroll)
+            .take(inner.height as usize)
+            .enumerate()
+            .map(|(y, (i, r, off))| {
+                at.push((inner.y + y as u16, lines[*i].0));
+                match cur {
+                    Some(c) if c == *i && self.cfg.motion => {
+                        let done = ((sung * len[c] as f64).round() as usize).saturating_sub(*off);
+                        let mut spans: Vec<Span> = r
+                            .chars()
+                            .take(done)
+                            .enumerate()
+                            .map(|(k, ch)| Span::styled(ch.to_string(), Style::new().fg(self.gradient((off + k) as f64 / len[c].max(1) as f64)).bold()))
+                            .collect();
+                        spans.push(Span::styled(r.chars().skip(done).collect::<String>(), Style::new().fg(t.fg).bold()));
+                        Line::from(spans)
+                    }
+                    Some(c) if c == *i => Line::styled(r.clone(), Style::new().fg(t.primary).bold()),
+                    Some(c) if *i < c => Line::styled(r.clone(), Style::new().fg(t.muted)),
+                    _ => Line::styled(r.clone(), Style::new().fg(t.fg)),
+                }
+            })
+            .collect();
+        self.hits.borrow_mut().lyric_rows = at;
+        f.render_widget(Paragraph::new(out).centered(), inner);
     }
 
     /// Sin letra, una rocola: luces que se persiguen por el arco, burbujas que
@@ -1018,6 +1099,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wraps_by_words() {
+        assert_eq!(wrap("uno dos tres", 7), ["uno dos", "tres"]);
+        assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(wrap("", 5), [""]);
+        assert_eq!(wrap("año más", 3), ["año", "más"]);
+    }
 
     #[test]
     fn mix_colors() {

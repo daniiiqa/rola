@@ -24,6 +24,7 @@ pub struct Hits {
     pub side: Rect,  // las filas de la barra lateral
     pub rows: Rect,  // las filas de la tabla (sin la cabecera)
     pub lyrics: Rect,
+    pub lyric_rows: Vec<(u16, f64)>, // fila de pantalla → segundo de su línea (letra con tiempos)
     pub bar: Rect,   // toda la barra de abajo
     pub prog: Rect,  // solo el tramo de la barra de progreso
     pub buttons: Vec<(Rect, Button)>,
@@ -103,6 +104,11 @@ impl App {
             }
         } else if inside(h.lyrics, x, y) {
             self.focus = Focus::Lyrics;
+            // en la letra con tiempos, clic en una línea salta a ella
+            if let Some(&(_, at)) = h.lyric_rows.iter().find(|(r, _)| *r == y) {
+                self.mpv.cmd(json!(["seek", at, "absolute"]));
+                self.lyrics_hand = None;
+            }
         } else if inside(h.prog, x, y) {
             self.seek_to(h, x);
         } else if let Some(&(_, btn)) = h.buttons.iter().find(|(r, _)| inside(*r, x, y)) {

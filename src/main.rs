@@ -161,6 +161,7 @@ struct App {
     lyrics_scroll: u16,
     lyrics_hand: Option<Instant>, // cuándo se movió a mano (deja de seguir a la canción un rato)
     lyrics_auto: Cell<u16>,       // dónde la dejó el último dibujo siguiendo a la canción
+    lyrics_total: Cell<u16>,      // filas de la letra con tiempos (ya partidas al ancho)
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -264,6 +265,7 @@ impl App {
             lyrics_scroll: 0,
             lyrics_hand: None,
             lyrics_auto: Cell::new(0),
+            lyrics_total: Cell::new(0),
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -968,7 +970,7 @@ impl App {
     fn lyrics_scroll(&mut self, d: isize) {
         let n = match &self.lyrics {
             Some((_, Lyrics::Text(t, _))) => t.lines().count(),
-            Some((_, Lyrics::Synced(l, _))) => l.len(),
+            Some((_, Lyrics::Synced(..))) => self.lyrics_total.get() as usize,
             _ => 0,
         };
         // desde donde iba siguiendo a la canción

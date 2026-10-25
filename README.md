@@ -112,7 +112,8 @@ canciones pide más, así que no se corta.
 
 `y` la muestra. Si [LRCLIB](https://lrclib.net) la tiene con tiempos (casi
 siempre), la línea que suena se resalta y la letra avanza sola con la canción;
-si la mueves a mano, a los pocos segundos vuelve a seguirla. Si no, sale la de
+si la mueves a mano, a los pocos segundos vuelve a seguirla. La que suena se
+va llenando como en el karaoke, y un clic en cualquier línea salta ahí. Si no, sale la de
 YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
