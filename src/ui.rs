@@ -20,6 +20,32 @@ const I_SPOTIFY: &str = "\u{f04c7}";
 const I_YOUTUBE: &str = "\u{f05c3}";
 
 const LOGO: [&str; 3] = ["┏━┓┏━┓╻  ┏━┓", "┣┳┛┃ ┃┃  ┣━┫", "╹┗╸┗━┛┗━╸╹ ╹"];
+/// Media rocola (la otra mitad es su espejo). o luces · B tubos · L «rola» ·
+/// R ventana del disco · T/A título/artista · k botonera · g rejilla.
+const ROCOLA: [&str; 22] = [
+    "            ╭────",
+    "        ╭───╯ ooo",
+    "     ╭──╯o       ",
+    "   ╭─╯o        LL",
+    "  ╭╯o   ╭────────",
+    "  │o  B │RRRRRRRR",
+    "  │o  B │RRRRRRRR",
+    "  │o  B │RRRRRRRR",
+    "  │o  B │RRRRRRRR",
+    "  │o  B │RRRRRRRR",
+    "  │o  B │RRRRRRRR",
+    "  │o  B ╰────────",
+    "  │o  B  TTTTTTTT",
+    "  │o  B  AAAAAAAA",
+    "  │o  B  ╭───────",
+    "  │o  B  │kkkkkkk",
+    "  │o  B  ╰───────",
+    "  │   B  gggggggg",
+    "  │   B  gggggggg",
+    "  │   B  gggggggg",
+    "  ╰───┴──────────",
+    "     ▀▀▀         ",
+];
 const LOGO_ASCII: [&str; 4] = [" _ __ ___ | | __ _ ", "| '__/ _ \\| |/ _` |", "| | | (_) | | (_| |", "|_|  \\___/|_|\\__,_|"];
 
 /// De `a` a `b` (0..=1); si alguno no es RGB (colores de la terminal), `a`.
@@ -272,6 +298,14 @@ impl App {
             .block(self.focus == Focus::Lyrics)
             .title(Line::styled(format!(" {} ", self.tx(s.lyrics)), Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
+        // sin letra: una rocola
+        if let (Some((_, Lyrics::Missing)), Some(it)) = (&self.lyrics, self.current()) {
+            self.hits.borrow_mut().lyrics = area;
+            let block = block.title_bottom(Line::styled(format!(" {} ", self.tx(s.no_lyrics)), Style::new().fg(t.muted).italic()).centered());
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            return self.draw_rocola(f, inner, it);
+        }
         let lines: Vec<Line> = match &self.lyrics {
             _ if self.current().is_none() => vec![Line::styled(self.tx(s.nothing_playing), muted)],
             Some((_, Lyrics::Text(text, source))) => {
@@ -314,6 +348,171 @@ impl App {
         let scroll = if self.following_lyrics() { self.lyrics_auto.get() } else { self.lyrics_scroll };
         let p = Paragraph::new(lines).centered().wrap(Wrap { trim: false }).scroll((scroll, 0));
         f.render_widget(p.block(block), area);
+    }
+
+    /// Sin letra, una rocola: luces que se persiguen por el arco, burbujas que
+    /// suben por los tubos, el disco girando en su ventana y el botón de la
+    /// que suena encendido. Todo va con la posición de la canción, así que en
+    /// pausa se queda quieta.
+    fn draw_rocola(&self, f: &mut Frame, area: Rect, it: &crate::api::Item) {
+        let t = self.theme;
+        // si no cabe entera, fuera primero rejilla de sobra y patas
+        let mut rows: Vec<&str> = ROCOLA.to_vec();
+        for drop in [21, 19, 18] {
+            if rows.len() as u16 > area.height {
+                rows.remove(drop);
+            }
+        }
+        let w = ROCOLA[0].chars().count() as u16 * 2;
+        if rows.len() as u16 > area.height || w > area.width {
+            let text = vec![
+                Line::styled(it.title.clone(), Style::new().fg(t.fg).bold()).centered(),
+                Line::styled(it.artist.clone(), Style::new().fg(t.muted)).centered(),
+            ];
+            let [mid] = Layout::vertical([Constraint::Length(2)]).flex(Flex::Center).areas(area);
+            return f.render_widget(Paragraph::new(text), mid);
+        }
+        let [col] = Layout::horizontal([Constraint::Length(w)]).flex(Flex::Center).areas(area);
+        let [body] = Layout::vertical([Constraint::Length(rows.len() as u16)]).flex(Flex::Center).areas(col);
+        let mirror = |c: char| match c {
+            '╭' => '╮',
+            '╮' => '╭',
+            '╯' => '╰',
+            '╰' => '╯',
+            c => c,
+        };
+        let grid: Vec<Vec<char>> = rows.iter().map(|l| l.chars().chain(l.chars().rev().map(mirror)).collect()).collect();
+        // con la canción: quieta en pausa, y sin animaciones todo encendido
+        let pos = if self.cfg.motion { self.pos.unwrap_or(0.0) } else { 0.0 };
+        let step = (pos * 4.0) as usize;
+        // las luces en orden alrededor del centro, para que la persecución dé la vuelta
+        let (cx, cy) = (w as f64 / 2.0, grid.len() as f64 / 2.0);
+        let mut lights: Vec<(usize, usize)> =
+            grid.iter().enumerate().flat_map(|(y, r)| r.iter().enumerate().filter(|(_, c)| **c == 'o').map(move |(x, _)| (x, y))).collect();
+        let ang = |&(x, y): &(usize, usize)| ((y as f64 - cy) * 2.0).atan2(x as f64 - cx);
+        lights.sort_by(|a, b| ang(a).partial_cmp(&ang(b)).unwrap_or(std::cmp::Ordering::Equal));
+        let tube = grid.iter().filter(|r| r.contains(&'B')).count().max(1) as f64;
+        let (mut window, mut title, mut artist, mut keys) = (None::<Rect>, None::<Rect>, None::<Rect>, None::<Rect>);
+        let grow = |r: &mut Option<Rect>, x: u16, y: u16| {
+            let c = Rect::new(x, y, 1, 1);
+            *r = Some(r.map_or(c, |r| r.union(c)));
+        };
+        let logo: Vec<char> = "rola".chars().collect();
+        let mut ty = 0.0;
+        let buf = f.buffer_mut();
+        for (y, row) in grid.iter().enumerate() {
+            if row.contains(&'B') {
+                ty += 1.0;
+            }
+            for (x, &ch) in row.iter().enumerate() {
+                let (px, py) = (body.x + x as u16, body.y + y as u16);
+                let edge = self.gradient(x as f64 / w as f64);
+                let (c, st) = match ch {
+                    ' ' => continue,
+                    'R' => {
+                        grow(&mut window, px, py);
+                        continue;
+                    }
+                    'T' => {
+                        grow(&mut title, px, py);
+                        continue;
+                    }
+                    'A' => {
+                        grow(&mut artist, px, py);
+                        continue;
+                    }
+                    'k' => {
+                        grow(&mut keys, px, py);
+                        continue;
+                    }
+                    'o' => {
+                        let i = lights.iter().position(|&l| l == (x, y)).unwrap_or(0);
+                        let lit = !self.cfg.motion || (i + lights.len() - step % lights.len()).is_multiple_of(3);
+                        let c = self.gradient(i as f64 / lights.len() as f64);
+                        if lit {
+                            ('●', Style::new().fg(c).bold())
+                        } else {
+                            ('•', Style::new().fg(mix(t.border, c, 0.35)))
+                        }
+                    }
+                    'B' => {
+                        // los colores suben por el tubo, y alguna burbuja con ellos
+                        let k = (ty / tube - pos * 0.25).rem_euclid(1.0);
+                        let c = self.gradient(1.0 - (2.0 * k - 1.0).abs());
+                        let bubble = self.cfg.motion && (y + step / 2 + if x < 17 { 0 } else { 2 }).is_multiple_of(5);
+                        (if bubble { '°' } else { '┃' }, Style::new().fg(c))
+                    }
+                    'L' => {
+                        let i = row[..x].iter().filter(|c| **c == 'L').count();
+                        (logo[i % logo.len()], Style::new().fg(self.gradient(i as f64 / 3.0)).bold())
+                    }
+                    'g' => (if x % 2 == 0 { '┊' } else { ' ' }, Style::new().fg(t.border)),
+                    '▀' => ('▀', Style::new().fg(t.border)),
+                    c => (c, Style::new().fg(edge)),
+                };
+                if let Some(cell) = buf.cell_mut((px, py)) {
+                    cell.set_char(c).set_style(st);
+                }
+            }
+        }
+        if let Some(r) = window {
+            self.disc(f, r, pos * std::f64::consts::TAU / 6.0);
+        }
+        let line = |r: Option<Rect>, s: Span<'static>, f: &mut Frame| {
+            if let Some(r) = r {
+                let l = self.marquee(vec![s], r.width);
+                f.render_widget(Paragraph::new(l).centered(), r);
+            }
+        };
+        line(title, Span::styled(it.title.clone(), Style::new().fg(t.fg).bold()), f);
+        line(artist, Span::styled(it.artist.clone(), Style::new().fg(t.muted)), f);
+        if let Some(r) = keys {
+            // la botonera, con la de esta canción encendida
+            let n = (r.width as usize).div_ceil(2);
+            let on = self.qi.unwrap_or(0) % n;
+            let spans: Vec<Span> = (0..n)
+                .map(|i| {
+                    if i == on {
+                        Span::styled("▪ ", Style::new().fg(t.accent).bold())
+                    } else {
+                        Span::styled("▪ ", Style::new().fg(t.muted))
+                    }
+                })
+                .collect();
+            f.render_widget(Paragraph::new(Line::from(spans)), r);
+        }
+    }
+
+    /// Un vinilo en `area`, girado `turn` radianes: surcos, un brillo doble que
+    /// da la vuelta y la etiqueta en degradado.
+    fn disc(&self, f: &mut Frame, area: Rect, turn: f64) {
+        let t = self.theme;
+        // las celdas son el doble de altas que anchas: el radio va en filas
+        let rf = (area.height as f64 / 2.0).min(area.width as f64 / 4.0);
+        let (cx, cy) = (area.x as f64 + area.width as f64 / 2.0, area.y as f64 + area.height as f64 / 2.0);
+        let vinyl = mix(t.border, t.base, 0.35);
+        let buf = f.buffer_mut();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let (dx, dy) = ((x as f64 + 0.5 - cx) / 2.0, y as f64 + 0.5 - cy);
+                let d = (dx * dx + dy * dy).sqrt() / rf;
+                let Some(c) = buf.cell_mut((x, y)) else { continue };
+                if d > 1.0 {
+                    continue;
+                }
+                let a = dy.atan2(dx) - turn;
+                if d < 0.15 {
+                    c.set_char('•').set_style(Style::new().fg(t.base).bg(self.gradient(0.5)));
+                } else if d < 0.42 {
+                    c.set_char(' ').set_style(Style::new().bg(self.gradient(0.5 + 0.5 * a.cos())));
+                } else {
+                    let shine = (2.0 * a).cos().max(0.0).powi(6);
+                    let groove = ((d * rf * 2.2) as i64) % 2 == 0;
+                    c.set_char(if groove { '·' } else { ' ' })
+                        .set_style(Style::new().fg(mix(t.muted, t.fg, shine)).bg(mix(vinyl, t.muted, shine * 0.45)));
+                }
+            }
+        }
     }
 
     fn draw_help(&self, f: &mut Frame) {
