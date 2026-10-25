@@ -53,6 +53,11 @@ impl Item {
         self.browse_id.as_deref()?.strip_prefix("sp:track:")
     }
 
+    /// Viene de Spotify (canción, álbum o playlist), aunque suene por YouTube Music.
+    pub fn is_spotify(&self) -> bool {
+        self.browse_id.as_deref().is_some_and(|b| b.starts_with("sp:"))
+    }
+
     pub fn playable(&self) -> bool {
         matches!(self.kind, Kind::Song | Kind::Video) && self.video_id.is_some()
     }

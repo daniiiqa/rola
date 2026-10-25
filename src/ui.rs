@@ -16,6 +16,8 @@ const I_PAUSE: &str = "\u{f03e4}";
 const I_SHUFFLE: &str = "\u{f049d}";
 const I_RADIO: &str = "\u{f0439}";
 const I_VOL: &str = "\u{f057e}";
+const I_SPOTIFY: &str = "\u{f04c7}";
+const I_YOUTUBE: &str = "\u{f05c3}";
 
 const LOGO: [&str; 3] = ["┏━┓┏━┓╻  ┏━┓", "┣┳┛┃ ┃┃  ┣━┫", "╹┗╸┗━┛┗━╸╹ ╹"];
 const LOGO_ASCII: [&str; 4] = [" _ __ ___ | | __ _ ", "| '__/ _ \\| |/ _` |", "| | | (_) | | (_| |", "|_|  \\___/|_|\\__,_|"];
@@ -67,6 +69,30 @@ impl App {
             Labels::Short => self.tx(short),
             Labels::Words => self.tx(word),
         }
+    }
+
+    /// De dónde viene algo: el logo de Spotify o el de YouTube Music, en su
+    /// color si el tema va en color. `long` deja la palabra entera (si toca).
+    fn source(&self, sp: bool, long: bool) -> Span<'static> {
+        let txt = match (self.cfg.labels, long) {
+            (Labels::Icons, _) if sp => I_SPOTIFY.into(),
+            (Labels::Icons, _) => I_YOUTUBE.into(),
+            (Labels::Words, true) if sp => self.tx("Spotify"),
+            (Labels::Words, true) => self.tx("YouTube"),
+            _ if sp => self.tx("sp"),
+            _ => self.tx("yt"),
+        };
+        let c = match self.cfg.tint {
+            Tint::Color if sp => Color::Rgb(30, 215, 96),
+            Tint::Color => Color::Rgb(255, 0, 51),
+            _ => self.theme.muted,
+        };
+        Span::styled(txt, Style::new().fg(c))
+    }
+
+    /// Los logos solo dicen algo cuando hay dos bibliotecas.
+    fn two_sources(&self) -> bool {
+        self.spotify.is_some()
     }
 
     // ── adornos ──
@@ -491,6 +517,12 @@ impl App {
             .map(|(label, id)| match id {
                 Side::Sep => ListItem::new(Line::styled(sep.clone(), Style::new().fg(t.border))),
                 Side::Hint => ListItem::new(Line::styled(self.tx(label), Style::new().fg(t.muted).italic())),
+                // con iconos, el logo delante; si no, el nombre ya lo dice (en su color)
+                Side::Head(sp) if self.cfg.labels == Labels::Icons => ListItem::new(Line::from(vec![
+                    self.source(*sp, false),
+                    Span::styled(format!(" {}", self.tx(label)), Style::new().fg(t.muted).bold()),
+                ])),
+                Side::Head(sp) => ListItem::new(Line::styled(self.tx(label), self.source(*sp, false).style.bold())),
                 _ => {
                     let icon = match id {
                         Side::Home => self.ic("\u{f02dc}  ", ""),
@@ -569,6 +601,7 @@ impl App {
         let cur = self.current().and_then(|x| x.video_id.clone());
         let qi = self.qi;
         let muted = Style::new().fg(t.muted);
+        let badges = self.two_sources();
         let rows: Vec<Row> = self
             .items()
             .iter()
@@ -598,32 +631,36 @@ impl App {
                 } else {
                     Style::new().fg(t.fg)
                 };
-                Row::new([
-                    Cell::from(mark),
+                let mut cells = vec![Cell::from(mark)];
+                if badges {
+                    cells.push(Cell::from(self.source(it.is_spotify(), false)));
+                }
+                cells.extend([
                     Cell::from(Span::styled(it.title.clone(), title_style)),
                     Cell::from(Span::styled(it.artist.clone(), muted)),
                     Cell::from(Span::styled(it.album.clone(), muted)),
                     Cell::from(Line::styled(it.duration.clone(), muted).right_aligned()),
-                ])
+                ]);
+                Row::new(cells)
             })
             .collect();
         let s = self.s();
-        let header = Row::new(["", s.col_title, s.col_artist, s.col_album, ""].map(|h| self.tx(h))).style(muted);
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(2),
-                Constraint::Fill(9),
-                Constraint::Fill(6),
-                Constraint::Fill(5),
-                Constraint::Length(7),
-            ],
-        )
-        .header(header)
-        .block(block)
-        .column_spacing(1)
-        .row_highlight_style(self.sel(focused).0)
-        .highlight_symbol(self.sel(focused).1);
+        // con dos bibliotecas, una columna para el logo de cada fila
+        let mut head = vec![""];
+        let mut cols = vec![Constraint::Length(2)];
+        if badges {
+            head.push("");
+            cols.push(Constraint::Length(2));
+        }
+        head.extend([s.col_title, s.col_artist, s.col_album, ""]);
+        cols.extend([Constraint::Fill(9), Constraint::Fill(6), Constraint::Fill(5), Constraint::Length(7)]);
+        let header = Row::new(head.into_iter().map(|h| self.tx(h))).style(muted);
+        let table = Table::new(rows, cols)
+            .header(header)
+            .block(block)
+            .column_spacing(1)
+            .row_highlight_style(self.sel(focused).0)
+            .highlight_symbol(self.sel(focused).1);
         if let Some(v) = self.views.last_mut() {
             f.render_stateful_widget(table, area, &mut v.state);
         }
@@ -683,6 +720,11 @@ impl App {
                     lead.push(Span::styled(format!("{} ", self.eq(4)), Style::new().fg(self.gradient(0.5))));
                 }
                 lead.push(Span::raw(" "));
+                // de qué biblioteca viene la que suena
+                if self.two_sources() {
+                    lead.push(self.source(it.is_spotify(), true));
+                    lead.push(Span::raw("  "));
+                }
                 let mut v = vec![Span::styled(it.title.clone(), Style::new().fg(t.fg).bold())];
                 if !it.artist.is_empty() {
                     v.push(Span::styled(format!("  ·  {}", it.artist), Style::new().fg(t.muted)));

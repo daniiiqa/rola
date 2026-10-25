@@ -86,6 +86,9 @@ Tu biblioteca de Spotify sale en la barra lateral (Canciones que te gustan,
 álbumes guardados y tus playlists) y suena por YouTube Music: cada canción se
 busca allí (mismo título y artista, duración parecida; la remezcla con la
 remezcla) y se recuerda en `~/.local/share/rola/spotify-match.json`.
+Con Spotify conectado, cada canción lleva el logo de donde viene (Spotify en
+verde, YouTube en rojo; «sp» / «yt» si el look no usa iconos), en la lista, en la
+cola y en la barra de abajo.
 
 Para conectarlo, `o` → Spotify. Spotify pide una app de desarrollador tuya
 (gratis) y, desde 2026, que su dueño tenga Premium:

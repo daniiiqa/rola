@@ -65,6 +65,7 @@ enum Side {
     Queue,
     Sep,
     Hint,
+    Head(bool), // cabecera de sección con su logo: Spotify (true) o YouTube Music
     Playlist(String),
     SpLiked,
     SpAlbums,
@@ -453,6 +454,10 @@ impl App {
         s.push((t.queue.into(), Side::Queue));
         if !playlists.is_empty() {
             s.push((String::new(), Side::Sep));
+            // con Spotify conectado hay dos bibliotecas: cada una con su logo
+            if self.spotify.is_some() {
+                s.push(("YouTube Music".into(), Side::Head(false)));
+            }
             for p in playlists {
                 if let Some(id) = &p.browse_id {
                     s.push((p.title.clone(), Side::Playlist(id.clone())));
@@ -464,7 +469,7 @@ impl App {
         }
         if self.spotify.is_some() {
             s.push((String::new(), Side::Sep));
-            s.push(("Spotify".into(), Side::Hint));
+            s.push(("Spotify".into(), Side::Head(true)));
             s.push((t.sp_liked.into(), Side::SpLiked));
             s.push((t.albums.into(), Side::SpAlbums));
             for p in &self.sp_playlists {
@@ -484,7 +489,7 @@ impl App {
             if i < 0 || i >= n {
                 return;
             }
-            if !matches!(self.side[i as usize].1, Side::Sep | Side::Hint) {
+            if !matches!(self.side[i as usize].1, Side::Sep | Side::Hint | Side::Head(_)) {
                 break;
             }
         }
@@ -511,7 +516,7 @@ impl App {
                 let sel = self.qi.unwrap_or(0);
                 self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)) });
             }
-            Side::Sep | Side::Hint => return,
+            Side::Sep | Side::Hint | Side::Head(_) => return,
         }
         self.focus = Focus::Main;
     }

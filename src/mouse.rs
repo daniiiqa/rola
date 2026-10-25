@@ -81,7 +81,7 @@ impl App {
             self.focus = Focus::Search;
         } else if inside(h.side, x, y) {
             let i = self.side_state.offset() + (y - h.side.y) as usize;
-            if self.side.get(i).is_some_and(|(_, s)| !matches!(s, Side::Sep | Side::Hint)) {
+            if self.side.get(i).is_some_and(|(_, s)| !matches!(s, Side::Sep | Side::Hint | Side::Head(_))) {
                 self.focus = Focus::Side;
                 self.side_state.select(Some(i));
                 self.side_activate();
