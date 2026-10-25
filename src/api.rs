@@ -48,6 +48,11 @@ impl Item {
         norm(&self.title) == norm(&o.title) && (a.is_empty() || b.is_empty() || a.iter().any(|x| b.iter().any(|y| x.starts_with(y.as_str()) || y.starts_with(x.as_str()))))
     }
 
+    /// Canción de Spotify (su id), tenga ya o no su video_id de YouTube Music.
+    pub fn sp_track(&self) -> Option<&str> {
+        self.browse_id.as_deref()?.strip_prefix("sp:track:")
+    }
+
     pub fn playable(&self) -> bool {
         matches!(self.kind, Kind::Song | Kind::Video) && self.video_id.is_some()
     }

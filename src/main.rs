@@ -12,6 +12,7 @@ mod mouse;
 mod mpris;
 mod mpv;
 mod settings;
+mod spotify;
 mod stream;
 mod theme;
 mod ui;
@@ -20,7 +21,8 @@ use api::{Api, Item, Kind};
 use config::Config;
 use i18n::{fill, Lang, Strings};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Condvar, Mutex};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::widgets::{ListState, TableState};
 use ratatui_image::picker::Picker;
@@ -47,6 +49,9 @@ pub enum Ev {
     Stream { vid: String, format: &'static str, link: Option<stream::Link> },
     Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
     LoggedIn(Result<String, String>), // nombre del navegador, o por qué no
+    SpotifyIn(Result<String, String>),           // usuario de Spotify, o por qué no
+    SpPlaylists(Vec<Item>),
+    Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
 }
 
@@ -61,6 +66,8 @@ enum Side {
     Sep,
     Hint,
     Playlist(String),
+    SpLiked,
+    SpAlbums,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -84,6 +91,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// conectar Spotify: el Client ID que se va escribiendo
+    Spotify { input: String, busy: bool, err: Option<String> },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -103,6 +112,8 @@ enum Load {
     Album(String),
     Artist(String),
     Search(String),
+    SpLiked,
+    SpAlbums,
 }
 
 struct View {
@@ -170,6 +181,12 @@ struct App {
     mpris: Option<mpris::Mpris>,
     track_n: u64, // sube con cada canción que se pone (para MPRIS)
     login_skipped: bool, // dijo «luego» al aviso de conectar la cuenta
+    spotify: Option<spotify::Spotify>,
+    sp_playlists: Vec<Item>,
+    sp_match: HashMap<String, Option<String>>, // canción de Spotify → video_id (None: no está)
+    matcher: Arc<(Mutex<VecDeque<Item>>, Condvar)>, // las que faltan por buscar en YouTube Music
+    matching: HashSet<String>,
+    sp_wait: Option<String>, // la que toca sonar, esperando a que se encuentre
 }
 
 /// Lo que dura el aviso de canción nueva.
@@ -267,8 +284,18 @@ impl App {
             mpris: mpris::Mpris::start(tx.clone()),
             track_n: 0,
             login_skipped: st["login_skipped"].as_bool().unwrap_or(false),
+            spotify: spotify::Spotify::load(&data_dir().join("spotify.json")),
+            sp_playlists: Vec::new(),
+            sp_match: std::fs::read_to_string(data_dir().join("spotify-match.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+            matcher: Arc::default(),
+            matching: HashSet::new(),
+            sp_wait: None,
         };
-        app.fill_side(&[]);
+        app.fill_side();
+        app.start_matchers();
         if !app.cfg.restore {
             return Ok(app.start());
         }
@@ -299,7 +326,8 @@ impl App {
     /// Lo que depende de la cuenta: playlists de la barra lateral e inicio.
     fn load_account(&mut self) {
         self.playlists.clear();
-        self.fill_side(&[]);
+        self.fill_side();
+        self.load_spotify();
         if self.api.authed() {
             let (api, tx) = (self.api.clone(), self.tx.clone());
             std::thread::spawn(move || match api.library_playlists() {
@@ -413,8 +441,8 @@ impl App {
     }
 
     // ── barra lateral ──
-    fn fill_side(&mut self, playlists: &[Item]) {
-        let t = self.s();
+    fn fill_side(&mut self) {
+        let (t, playlists) = (self.s(), &self.playlists);
         let mut s = vec![(t.home.to_string(), Side::Home)];
         if self.api.authed() {
             s.push((t.liked.into(), Side::Liked));
@@ -433,6 +461,17 @@ impl App {
         } else if !self.api.authed() {
             s.push((String::new(), Side::Sep));
             s.push((t.no_account_hint.into(), Side::Hint));
+        }
+        if self.spotify.is_some() {
+            s.push((String::new(), Side::Sep));
+            s.push(("Spotify".into(), Side::Hint));
+            s.push((t.sp_liked.into(), Side::SpLiked));
+            s.push((t.albums.into(), Side::SpAlbums));
+            for p in &self.sp_playlists {
+                if let Some(id) = &p.browse_id {
+                    s.push((p.title.clone(), Side::Playlist(id.clone())));
+                }
+            }
         }
         self.side = s;
     }
@@ -463,6 +502,8 @@ impl App {
             Side::Albums => self.open(&title, Load::Albums, true),
             Side::Artists => self.open(&title, Load::Artists, true),
             Side::Playlist(pid) => self.open(&title, Load::Playlist(pid), true),
+            Side::SpLiked => self.open(&format!("Spotify › {title}"), Load::SpLiked, true),
+            Side::SpAlbums => self.open(&format!("Spotify › {title}"), Load::SpAlbums, true),
             Side::Queue => {
                 self.seq += 1;
                 self.loading = None;
@@ -481,8 +522,14 @@ impl App {
         let (seq, api, tx, title) = (self.seq, self.api.clone(), self.tx.clone(), title.to_string());
         self.loading = Some(title.clone());
         let radio = matches!(load, Load::Home | Load::Search(_));
+        let sp = self.spotify.clone();
         std::thread::spawn(move || {
+            let spot = |f: &dyn Fn(&spotify::Spotify) -> Result<Vec<Item>, String>| sp.as_ref().map_or(Ok(Vec::new()), f);
             let res = match load {
+                Load::SpLiked => spot(&|s| s.liked()),
+                Load::SpAlbums => spot(&|s| s.albums()),
+                Load::Playlist(id) if id.starts_with("sp:playlist:") => spot(&|s| s.playlist(&id[12..])),
+                Load::Album(id) if id.starts_with("sp:album:") => spot(&|s| s.album(&id[9..])),
                 Load::Home => api.home(),
                 Load::Liked => api.liked(),
                 Load::History => api.history(),
@@ -533,9 +580,11 @@ impl App {
         if it.playable() && self.views.last().is_some_and(|v| v.radio) {
             return self.start_radio(it);
         }
-        if it.playable() {
-            let items: Vec<Item> = self.items().iter().filter(|x| x.playable()).cloned().collect();
-            let start = self.items()[..i].iter().filter(|x| x.playable()).count();
+        // las de Spotify que aún se buscan en YouTube Music entran también
+        let ok = |x: &Item| x.playable() || x.sp_track().is_some();
+        if ok(&it) {
+            let items: Vec<Item> = self.items().iter().filter(|x| ok(x)).cloned().collect();
+            let start = self.items()[..i].iter().filter(|x| ok(x)).count();
             return self.play_from(items, start);
         }
         let Some(id) = it.browse_id.clone() else { return };
@@ -568,6 +617,19 @@ impl App {
     }
 
     fn play_index(&mut self, i: usize) {
+        self.sp_wait = None;
+        if let Some(it) = self.queue.get(i).filter(|x| x.video_id.is_none()).cloned() {
+            let Some(sp) = it.sp_track().map(String::from) else { return };
+            self.qi = Some(i);
+            if let Some(None) = self.sp_match.get(&sp) {
+                // no está en YouTube Music: a la siguiente
+                self.notify(fill(self.s().sp_not_found, &[&it.title]), true);
+                return if i + 1 < self.queue.len() { self.play_index(i + 1) } else { self.stop() };
+            }
+            self.stop();
+            self.sp_wait = Some(sp);
+            return self.match_now(it);
+        }
         let Some(vid) = self.queue.get(i).and_then(|x| x.video_id.clone()) else { return };
         let start = self.resume.take().filter(|r| r.0 == self.queue[i].video_id).map(|r| r.1);
         self.qi = Some(i);
@@ -643,6 +705,130 @@ impl App {
         let title = self.current().map(|x| x.title.clone()).unwrap_or_default();
         self.direct = false;
         self.mpv.load(vid, None, &title, start);
+    }
+
+    // ── Spotify ──
+    fn load_spotify(&mut self) {
+        let Some(sp) = self.spotify.clone() else { return };
+        let tx = self.tx.clone();
+        std::thread::spawn(move || match sp.playlists() {
+            Ok(p) => drop(tx.send(Ev::SpPlaylists(p))),
+            Err(e) => drop(tx.send(Ev::Notify(e, true))),
+        });
+    }
+
+    /// Tres hilos que buscan en YouTube Music las canciones de Spotify.
+    fn start_matchers(&self) {
+        for _ in 0..3 {
+            let (m, api, tx) = (self.matcher.clone(), self.api.clone(), self.tx.clone());
+            std::thread::spawn(move || loop {
+                let it = {
+                    let (q, cv) = &*m;
+                    let mut q = q.lock().unwrap_or_else(|e| e.into_inner());
+                    loop {
+                        match q.pop_front() {
+                            Some(it) => break it,
+                            None => q = cv.wait(q).unwrap_or_else(|e| e.into_inner()),
+                        }
+                    }
+                };
+                let sp = it.sp_track().unwrap_or("").to_string();
+                let vid = spotify::best_match(&api, &it);
+                if tx.send(Ev::Matched { sp, vid }).is_err() {
+                    break;
+                }
+            });
+        }
+    }
+
+    /// Les pone el video_id a las ya conocidas y manda a buscar las demás.
+    fn resolve_spotify(&mut self, items: &mut [Item]) {
+        let mut todo = Vec::new();
+        for it in items.iter_mut() {
+            let Some(sp) = it.sp_track() else { continue };
+            match self.sp_match.get(sp) {
+                Some(v) => it.video_id = v.clone(),
+                None => todo.push(it.clone()),
+            }
+        }
+        let (q, cv) = &*self.matcher;
+        let mut q = q.lock().unwrap_or_else(|e| e.into_inner());
+        for it in todo {
+            if self.matching.insert(it.sp_track().unwrap_or("").to_string()) {
+                q.push_back(it);
+            }
+        }
+        cv.notify_all();
+    }
+
+    /// Esta antes que ninguna (es la que toca sonar).
+    fn match_now(&mut self, it: Item) {
+        let sp = it.sp_track().unwrap_or("").to_string();
+        let (q, cv) = &*self.matcher;
+        let mut q = q.lock().unwrap_or_else(|e| e.into_inner());
+        q.retain(|x| x.sp_track() != Some(&sp));
+        q.push_front(it);
+        self.matching.insert(sp);
+        cv.notify_all();
+    }
+
+    fn matched(&mut self, sp: String, vid: Option<String>) {
+        self.matching.remove(&sp);
+        self.sp_match.insert(sp.clone(), vid.clone());
+        for v in self.views.iter_mut() {
+            for it in v.items.iter_mut().filter(|x| x.sp_track() == Some(&sp)) {
+                it.video_id = vid.clone();
+            }
+        }
+        for it in self.queue.iter_mut().filter(|x| x.sp_track() == Some(&sp)) {
+            it.video_id = vid.clone();
+        }
+        if self.sp_wait.as_ref() == Some(&sp) {
+            if let Some(q) = self.qi {
+                self.play_index(q);
+            }
+        }
+    }
+
+    pub fn open_spotify(&mut self) {
+        let input = self.spotify.as_ref().map(|s| s.client_id()).unwrap_or_default();
+        self.popup = Some(Popup::Spotify { input, busy: false, err: None });
+    }
+
+    fn spotify_key(&mut self, k: KeyEvent) {
+        let Some(Popup::Spotify { input, busy, err }) = &mut self.popup else { return };
+        if *busy {
+            if k.code == KeyCode::Esc {
+                self.popup = None; // el navegador puede seguir; da igual
+            }
+            return;
+        }
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc => self.popup = None,
+            KeyCode::Enter if !input.trim().is_empty() => {
+                *busy = true;
+                *err = None;
+                let (id, tx, file) = (input.trim().to_string(), self.tx.clone(), data_dir().join("spotify.json"));
+                std::thread::spawn(move || {
+                    let res = spotify::Spotify::login(&id, &file).map(|s| s.user());
+                    let _ = tx.send(Ev::SpotifyIn(res));
+                });
+            }
+            // con sesión: Ctrl+D la cierra
+            KeyCode::Char('d') if ctrl && self.spotify.is_some() => {
+                let _ = std::fs::remove_file(data_dir().join("spotify.json"));
+                self.spotify = None;
+                self.sp_playlists.clear();
+                self.popup = None;
+                self.fill_side();
+                self.notify(self.s().sp_disconnected, false);
+            }
+            KeyCode::Char('u') if ctrl => input.clear(),
+            KeyCode::Backspace => drop(input.pop()),
+            KeyCode::Char(c) if !ctrl => input.push(c),
+            _ => {}
+        }
     }
 
     // ── portada ──
@@ -795,6 +981,9 @@ impl App {
             if matches!(popup, Popup::Login { .. }) {
                 return self.login_key(k);
             }
+            if matches!(popup, Popup::Spotify { .. }) {
+                return self.spotify_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -946,6 +1135,8 @@ impl App {
                         if reset {
                             self.views.clear();
                         }
+                        let mut items = items;
+                        self.resolve_spotify(&mut items);
                         let state = TableState::default().with_selected(Some(0));
                         self.push(View { title, items, queue: false, radio, state });
                     }
@@ -953,9 +1144,28 @@ impl App {
                 }
             }
             Ev::Playlists(p) => {
-                self.fill_side(&p);
                 self.playlists = p;
+                self.fill_side();
             }
+            Ev::SpPlaylists(p) => {
+                self.sp_playlists = p;
+                self.fill_side();
+            }
+            Ev::SpotifyIn(res) => match res {
+                Ok(user) => {
+                    self.spotify = spotify::Spotify::load(&data_dir().join("spotify.json"));
+                    self.popup = None;
+                    self.notify(fill(self.s().sp_connected, &[&user]), false);
+                    self.load_spotify();
+                }
+                Err(e) => {
+                    if let Some(Popup::Spotify { busy, err, .. }) = &mut self.popup {
+                        *busy = false;
+                        *err = Some(e);
+                    }
+                }
+            },
+            Ev::Matched { sp, vid } => self.matched(sp, vid),
             Ev::Cover { vid, img } => {
                 if let Some((v, c)) = &mut self.cover {
                     if *v == vid {
@@ -1351,8 +1561,7 @@ impl App {
                 v.title = n.into();
             }
         }
-        let p = self.playlists.clone();
-        self.fill_side(&p);
+        self.fill_side();
     }
 
     /// Recarga config y tema si sus archivos cambiaron; true si algo cambió.
@@ -1461,6 +1670,9 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
     mouse_capture(false);
     ratatui::restore();
     app.save_state();
+    if !app.sp_match.is_empty() {
+        let _ = std::fs::write(data_dir().join("spotify-match.json"), serde_json::to_string(&app.sp_match).unwrap_or_default());
+    }
     res
 }
 

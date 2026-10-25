@@ -80,6 +80,24 @@ suena en ~0.1 s. Si pones una en frío, empieza a los ~3 s con el audio de
 reserva de mpv (aac ~96k) y a los ~7 s pasa sola al bueno, en el mismo punto.
 Si un enlace caduca o falla, pide otro y, si no, sigue con el de mpv.
 
+## Spotify
+
+Tu biblioteca de Spotify sale en la barra lateral (Canciones que te gustan,
+álbumes guardados y tus playlists) y suena por YouTube Music: cada canción se
+busca allí (mismo título y artista, duración parecida; la remezcla con la
+remezcla) y se recuerda en `~/.local/share/rola/spotify-match.json`.
+
+Para conectarlo, `o` → Spotify. Spotify pide una app de desarrollador tuya
+(gratis) y, desde 2026, que su dueño tenga Premium:
+
+1. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) → Create app
+2. Redirect URI: `http://127.0.0.1:8898/callback`, API: Web API
+3. Copia el Client ID, pégalo en rola y Enter: el navegador se abre para dar permiso.
+
+Sin secretos: solo el Client ID y un token que se renueva solo
+(`~/.local/share/rola/spotify.json`, 0600). La API ya no da el contenido de
+playlists que no son tuyas (ni colaborativas), así que esas no salen.
+
 ## Radio
 
 Como en YT Music: `Enter` en una canción del inicio o de una búsqueda pone esa

@@ -13,6 +13,7 @@ libc = "0.2"
 ratatui-image = { version = "8.1", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 zbus = "5"
+sha2 = "0.11.1"
 
 [profile.release]
 lto = true

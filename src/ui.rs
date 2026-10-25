@@ -220,6 +220,7 @@ impl App {
             Some(Popup::Settings { sel }) => self.draw_settings(f, *sel),
             Some(Popup::AddTo { .. }) => self.draw_add_to(f),
             Some(Popup::Login { .. }) => self.draw_login(f),
+            Some(Popup::Spotify { .. }) => self.draw_spotify(f),
             None => {}
         }
     }
@@ -420,6 +421,42 @@ impl App {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 
+    fn draw_spotify(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::Spotify { input, busy, err }) = &self.popup else { return };
+        let mut lines: Vec<Line> = Vec::new();
+        if let Some(sp) = &self.spotify {
+            lines.push(Line::styled(fill(s.sp_connected, &[&sp.user()]), Style::new().fg(t.primary)));
+            lines.push(Line::styled(self.tx(s.sp_disconnect_hint), Style::new().fg(t.muted)));
+            lines.push(Line::raw(""));
+        }
+        for (i, l) in s.sp_steps.iter().enumerate() {
+            lines.push(Line::styled(*l, Style::new().fg(if i == 0 { t.muted } else { t.fg })));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}: ", self.tx(s.sp_input)), Style::new().fg(t.primary).bold()),
+            Span::styled(input.clone(), Style::new().fg(t.fg)),
+            Span::styled(if *busy { "" } else { "▏" }, Style::new().fg(t.primary)),
+        ]));
+        if *busy {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(self.tx(s.sp_busy), Style::new().fg(t.primary).italic()));
+        } else if let Some(e) = err {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(e.clone(), Style::new().fg(t.accent)));
+        }
+        let w = 78.min(f.area().width.saturating_sub(4));
+        let h: u16 = lines.iter().map(|l| (l.width() as u16).div_ceil(w.saturating_sub(4).max(1)).max(1)).sum();
+        let area = self.popup_area(f, w, h + 2);
+        self.hits.borrow_mut().popup = area;
+        let block = self
+            .block(true)
+            .title(Line::styled(format!(" {} ", self.tx(s.sp_title)), Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+    }
+
     fn draw_search(&self, f: &mut Frame, area: Rect) {
         let t = self.theme;
         let focused = self.focus == Focus::Search;
@@ -495,6 +532,12 @@ impl App {
         if let Some(l) = &self.loading {
             title.push(Span::styled(format!("   … {l}"), Style::new().fg(t.muted).italic()));
         }
+        // canciones de Spotify que aún se están buscando en YouTube Music
+        let pending = self.items().iter().filter(|x| x.video_id.is_none() && x.sp_track().is_some_and(|sp| self.matching.contains(sp))).count();
+        if pending > 0 {
+            let msg = fill(self.s().sp_matching, &[&pending.to_string()]);
+            title.push(Span::styled(format!("   … {}", self.tx(&msg)), Style::new().fg(t.muted).italic()));
+        }
         title.push(Span::raw(" "));
         let mut block = self.block(focused).title(Line::from(title));
         // canción nueva: su nombre arriba a la derecha un momento, con un destello al entrar
@@ -550,7 +593,7 @@ impl App {
                 };
                 let title_style = if playing {
                     Style::new().fg(t.primary).bold()
-                } else if played {
+                } else if played || (it.sp_track().is_some() && it.video_id.is_none()) {
                     muted
                 } else {
                     Style::new().fg(t.fg)
@@ -689,6 +732,7 @@ impl App {
             (Some(Popup::Help), _) => s.foot_help,
             (Some(Popup::Settings { .. }), _) => s.foot_settings,
             (Some(Popup::Login { .. }), _) => s.foot_login,
+            (Some(Popup::Spotify { .. }), _) => s.foot_spotify,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
