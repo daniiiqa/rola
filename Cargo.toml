@@ -1,0 +1,17 @@
+[package]
+name = "ytm"
+version = "0.1.0"
+edition = "2021"
+description = "YouTube Music en la terminal, al estilo spotify-tui"
+
+[dependencies]
+ratatui = "0.29"
+serde_json = { version = "1", features = ["preserve_order"] }
+ureq = "2"
+sha1_smol = "1"
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
