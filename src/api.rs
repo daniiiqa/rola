@@ -58,6 +58,22 @@ impl Item {
         self.browse_id.as_deref().is_some_and(|b| b.starts_with("sp:"))
     }
 
+    /// Su enlace para compartir: el de Spotify si viene de allí.
+    pub fn link(&self) -> Option<String> {
+        if let Some(b) = self.browse_id.as_deref() {
+            if let Some((kind, id)) = b.strip_prefix("sp:").and_then(|r| r.split_once(':')) {
+                return Some(format!("https://open.spotify.com/{kind}/{id}"));
+            }
+            if let Some(list) = b.strip_prefix("VL") {
+                return Some(format!("https://music.youtube.com/playlist?list={list}"));
+            }
+            if self.video_id.is_none() {
+                return Some(format!("https://music.youtube.com/browse/{b}"));
+            }
+        }
+        self.video_id.as_ref().map(|v| format!("https://music.youtube.com/watch?v={v}"))
+    }
+
     pub fn playable(&self) -> bool {
         matches!(self.kind, Kind::Song | Kind::Video) && self.video_id.is_some()
     }
@@ -828,6 +844,16 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].video_id.as_deref(), Some("song1"));
         assert_eq!(items[0].album, "$AD BOYZ");
+    }
+
+    #[test]
+    fn links() {
+        let it = |v: Option<&str>, b: Option<&str>| Item { kind: Kind::Song, title: String::new(), artist: String::new(), album: String::new(), duration: String::new(), video_id: v.map(String::from), browse_id: b.map(String::from), thumb: String::new() };
+        assert_eq!(it(Some("abc"), None).link().unwrap(), "https://music.youtube.com/watch?v=abc");
+        assert_eq!(it(Some("abc"), Some("sp:track:xyz")).link().unwrap(), "https://open.spotify.com/track/xyz");
+        assert_eq!(it(None, Some("VLPL123")).link().unwrap(), "https://music.youtube.com/playlist?list=PL123");
+        assert_eq!(it(None, Some("MPREb_1")).link().unwrap(), "https://music.youtube.com/browse/MPREb_1");
+        assert!(it(None, None).link().is_none());
     }
 
     #[test]

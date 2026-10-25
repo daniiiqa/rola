@@ -131,7 +131,7 @@ Para seleccionar texto, Mayús + arrastrar; o se apaga en ajustes → Ratón.
 
 `/` buscar · `Enter` reproducir/abrir · `espacio` pausa · `n`/`p` sig./ant. ·
 `<`/`>` ±5s · `+`/`-` volumen · `s` aleatorio · `r` repetir · `a` autoplay
-(radio al acabar la cola) · `z` a la cola · `R` radio · `L` me gusta · `t` temporizador (al acabar esta / 15…90 min, bajando el volumen) ·
+(radio al acabar la cola) · `z` a la cola · `R` radio · `L` me gusta · `t` temporizador (al acabar esta / 15…90 min, bajando el volumen) · `Y` copiar el enlace ·
 `P` añadir a una playlist · `y` letra · `c` portada · `o` ajustes · `?` ayuda ·
 `h`/`l`/`Tab` panel · `j`/`k`/`g`/`G` moverse · `Backspace` atrás · `q` salir
 

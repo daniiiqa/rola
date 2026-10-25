@@ -1427,6 +1427,7 @@ impl App {
             }
             KeyCode::Char('L') => self.like(),
             KeyCode::Char('t') => self.cycle_sleep(),
+            KeyCode::Char('Y') => self.copy_link(),
             _ => {}
         }
     }
@@ -1614,6 +1615,19 @@ impl App {
         sel.filter(Item::playable).or_else(|| self.current().cloned())
     }
 
+    /// Y: el enlace de lo elegido (o de la que suena) al portapapeles.
+    fn copy_link(&mut self) {
+        let sel = if self.focus == Focus::Main { self.selected().map(|x| x.1) } else { None };
+        let Some(it) = sel.or_else(|| self.current().cloned()) else { return };
+        match it.link() {
+            Some(url) => {
+                clipboard(&url);
+                self.notify(fill(self.s().copied, &[&it.title]), false);
+            }
+            None => self.notify(self.s().no_link, true),
+        }
+    }
+
     fn like(&mut self) {
         let Some(it) = self.target() else { return };
         if !self.api.authed() {
@@ -1736,6 +1750,40 @@ impl App {
         }
         changed
     }
+}
+
+/// Al portapapeles: wl-copy, xclip o xsel si están; si no, se le pide a la
+/// terminal (OSC 52: kitty, foot, wezterm… también por SSH).
+fn clipboard(text: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let tools: [(&str, &[&str]); 3] = [("wl-copy", &[]), ("xclip", &["-selection", "clipboard"]), ("xsel", &["-ib"])];
+    for (cmd, args) in tools {
+        let Ok(mut child) = Command::new(cmd).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        if child.wait().is_ok_and(|s| s.success()) {
+            return;
+        }
+    }
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    let _ = out.flush();
+}
+
+fn base64(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in data.chunks(3) {
+        let n = c.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= c.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
 }
 
 /// "3:45" / "1:02:03" → segundos.
@@ -1872,5 +1920,17 @@ fn main() {
     });
     if let Err(e) = run(rx, app, term) {
         eprintln!("rola: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn base64() {
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"f"), "Zg==");
+        assert_eq!(super::base64(b"fo"), "Zm8=");
+        assert_eq!(super::base64(b"foo"), "Zm9v");
+        assert_eq!(super::base64(b"https://music.youtube.com/watch?v=abc"), "aHR0cHM6Ly9tdXNpYy55b3V0dWJlLmNvbS93YXRjaD92PWFiYw==");
     }
 }

@@ -171,6 +171,8 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub no_link: &'static str,
+    pub copied: &'static str,
     pub sleep_end: &'static str,
     pub sleep_done: &'static str,
     pub sleep_off: &'static str,
@@ -265,6 +267,7 @@ pub static ES: Strings = Strings {
         ("R", "radio de la canción"),
         ("L", "me gusta"),
         ("t", "temporizador: al acabar esta / 15…90 min"),
+        ("Y", "copiar el enlace (YouTube Music o Spotify)"),
         ("P", "añadir a una playlist"),
         ("y", "letra"),
         ("c", "portada"),
@@ -356,6 +359,8 @@ pub static ES: Strings = Strings {
     sleep_off: "temporizador apagado",
     sleep_done: "buenas noches",
     sleep_end: "fin",
+    copied: "enlace de «{}» copiado",
+    no_link: "esto no tiene enlace",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -446,6 +451,7 @@ pub static EN: Strings = Strings {
         ("R", "song radio"),
         ("L", "like"),
         ("t", "sleep timer: end of song / 15…90 min"),
+        ("Y", "copy the link (YouTube Music or Spotify)"),
         ("P", "add to a playlist"),
         ("y", "lyrics"),
         ("c", "cover art"),
@@ -537,5 +543,7 @@ pub static EN: Strings = Strings {
     sleep_off: "sleep timer off",
     sleep_done: "good night",
     sleep_end: "end",
+    copied: "copied the link to “{}”",
+    no_link: "this has no link",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };
