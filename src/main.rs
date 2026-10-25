@@ -150,7 +150,13 @@ struct App {
     note: Option<(String, bool, Instant)>,
     rng: u64,
     quit: bool,
+    epoch: Instant,               // reloj de las animaciones
+    song_start: Instant,          // para que el título largo empiece quieto
+    splash: Option<Instant>,      // canción nueva: su nombre arriba un momento
 }
+
+/// Lo que dura el aviso de canción nueva.
+pub const SPLASH: Duration = Duration::from_millis(3500);
 
 fn data_dir() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
@@ -227,6 +233,9 @@ impl App {
             note: None,
             rng: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1,
             quit: false,
+            epoch: Instant::now(),
+            song_start: Instant::now(),
+            splash: None,
         };
         app.fill_side(&[]);
         if !app.cfg.restore {
@@ -459,6 +468,8 @@ impl App {
         let Some(vid) = self.queue.get(i).and_then(|x| x.video_id.clone()) else { return };
         let start = self.resume.take().filter(|r| r.0 == i).map(|r| r.1);
         self.qi = Some(i);
+        self.song_start = Instant::now();
+        self.splash = Some(Instant::now());
         self.added = 0;
         self.loaded = true;
         self.pos = None;
@@ -508,6 +519,11 @@ impl App {
     }
 
     /// Lo que se ve en la cola, o lo que está sonando si no se mira la cola.
+    /// Hay algo moviéndose en pantalla: redibujar más a menudo.
+    fn animating(&self) -> bool {
+        self.cfg.motion && ((self.loaded && !self.paused) || self.splash.is_some_and(|s| s.elapsed() < SPLASH))
+    }
+
     pub fn queue_view(&self) -> bool {
         self.focus == Focus::Main && self.views.last().is_some_and(|v| v.queue)
     }
@@ -1130,7 +1146,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
     let mut last_tick = Instant::now();
     let res = loop {
         let mut urgent = false;
-        match rx.recv_timeout(Duration::from_millis(250)) {
+        match rx.recv_timeout(Duration::from_millis(60)) {
             Ok(ev) => {
                 urgent |= !matches!(ev, Ev::Prop(..));
                 app.handle(ev);
@@ -1150,7 +1166,8 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
             last_tick = Instant::now();
         }
         // time-pos llega muchas veces por segundo; la barra no necesita tanto
-        if urgent || last_draw.elapsed() >= Duration::from_millis(250) {
+        let every = if app.animating() { 120 } else { 250 };
+        if urgent || last_draw.elapsed() >= Duration::from_millis(every) {
             if let Err(e) = term.draw(|f| app.draw(f)) {
                 break Err(e);
             }

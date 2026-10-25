@@ -22,6 +22,7 @@ pub enum Setting {
     Side,
     Lyrics,
     Footer,
+    Motion,
     Cover,
     Quality,
     VolStep,
@@ -49,6 +50,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Side,
             Setting::Lyrics,
             Setting::Footer,
+            Setting::Motion,
             Setting::Cover,
         ],
     ),
@@ -76,6 +78,7 @@ impl Setting {
             Setting::Side => s.set_side,
             Setting::Lyrics => s.set_lyrics,
             Setting::Footer => s.set_footer,
+            Setting::Motion => s.set_motion,
             Setting::Cover => s.set_cover,
             Setting::Quality => s.set_quality,
             Setting::VolStep => s.set_vol_step,
@@ -101,6 +104,7 @@ impl Setting {
             Setting::Side => "side_width",
             Setting::Lyrics => "lyrics_width",
             Setting::Footer => "footer",
+            Setting::Motion => "motion",
             Setting::Quality => "quality",
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
@@ -136,6 +140,7 @@ impl App {
             Setting::Side => c.side_width.to_string(),
             Setting::Lyrics => format!("{}%", c.lyrics_width),
             Setting::Footer => yn(c.footer),
+            Setting::Motion => yn(c.motion),
             Setting::Cover => yn(self.cover_on),
             Setting::Quality => s.qualities[idx(c.quality)].into(),
             Setting::VolStep => format!("{}%", c.vol_step),
@@ -169,6 +174,7 @@ impl App {
             Setting::Side => c.side_width = step_in(config::SIDE_WIDTHS, c.side_width, d),
             Setting::Lyrics => c.lyrics_width = step_in(config::LYRICS_WIDTHS, c.lyrics_width, d),
             Setting::Footer => c.footer = !c.footer,
+            Setting::Motion => c.motion = !c.motion,
             Setting::Cover => {
                 self.cover_on = !self.cover_on;
                 self.fetch_cover();

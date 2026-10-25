@@ -34,7 +34,8 @@ en las demás con medios bloques.
   estilo de la barra de progreso, botones con iconos Nerd Font, palabras cortas o enteras, rótulos en
   mayúsculas o minúsculas, cómo se marca la fila elegida (relleno, barra al
   lado, invertida), color (normal, fósforo, tinta), ancho de la barra lateral y de la
-  letra, atajos al pie, portada.
+  letra, atajos al pie, portada, animaciones (ecualizador, títulos largos que se
+  desplazan, aviso de canción nueva; la barra va en degradado si el color es «a color»).
 - **Reproducción**: calidad del audio (la mejor, ≤128k, baja), paso del
   volumen, salto de `<`/`>`, autoplay.
 

@@ -1,8 +1,8 @@
 use crate::api::Kind;
-use crate::config::{Labels, Select};
+use crate::config::{Bar, Labels, Select, Tint};
 use crate::i18n::fill;
 use crate::settings::{self, SECTIONS};
-use crate::{App, Focus, Lyrics, Popup, Repeat, Side};
+use crate::{App, Focus, Lyrics, Popup, Repeat, Side, SPLASH};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -15,6 +15,20 @@ const I_PAUSE: &str = "\u{f03e4}";
 const I_SHUFFLE: &str = "\u{f049d}";
 const I_RADIO: &str = "\u{f0439}";
 const I_VOL: &str = "\u{f057e}";
+
+const LOGO: [&str; 3] = ["┏━┓┏━┓╻  ┏━┓", "┣┳┛┃ ┃┃  ┣━┫", "╹┗╸┗━┛┗━╸╹ ╹"];
+const LOGO_ASCII: [&str; 4] = [" _ __ ___ | | __ _ ", "| '__/ _ \\| |/ _` |", "| | | (_) | | (_| |", "|_|  \\___/|_|\\__,_|"];
+
+/// De `a` a `b` (0..=1); si alguno no es RGB (colores de la terminal), `a`.
+fn mix(a: Color, b: Color, k: f64) -> Color {
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let m = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * k.clamp(0.0, 1.0)).round() as u8;
+            Color::Rgb(m(r1, r2), m(g1, g2), m(b1, b2))
+        }
+        _ => a,
+    }
+}
 
 fn fmt(sec: Option<f64>) -> String {
     let Some(s) = sec else { return "-:--".into() };
@@ -52,6 +66,91 @@ impl App {
             Labels::Short => self.tx(short),
             Labels::Words => self.tx(word),
         }
+    }
+
+    // ── adornos ──
+
+    /// Los colores van en degradado (con tinta o fósforo, un solo color).
+    fn gradient(&self, k: f64) -> Color {
+        let t = self.theme;
+        if self.cfg.tint == Tint::Color {
+            mix(t.primary, t.accent, k)
+        } else {
+            t.primary
+        }
+    }
+
+    fn playing(&self) -> bool {
+        self.loaded && !self.paused
+    }
+
+    /// Un ecualizador de `n` barras que bailan mientras suena.
+    fn eq(&self, n: usize) -> String {
+        let lv: &[char] = if self.cfg.bar == Bar::Ascii {
+            &['_', '.', '-', '=', '#']
+        } else {
+            &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+        };
+        let t = self.epoch.elapsed().as_secs_f64();
+        (0..n)
+            .map(|k| {
+                if !self.playing() || !self.cfg.motion {
+                    return lv[lv.len() / 3];
+                }
+                let k = k as f64;
+                let v = ((t * (5.3 + k * 1.9)).sin() + 0.6 * (t * (3.1 + k * 2.7) + k).sin() + 1.6) / 3.2;
+                lv[(v.clamp(0.0, 0.999) * lv.len() as f64) as usize]
+            })
+            .collect()
+    }
+
+    /// Una línea que, si no cabe en `w`, se desplaza como en la radio del coche
+    /// (quieta dos segundos al empezar cada vuelta).
+    fn marquee(&self, spans: Vec<Span<'static>>, w: u16) -> Line<'static> {
+        let line = Line::from(spans);
+        if !self.cfg.motion || line.width() <= w as usize {
+            return line;
+        }
+        let gap = "     ";
+        let mut cells: Vec<(char, Style)> = Vec::new();
+        for s in line.spans.iter() {
+            cells.extend(s.content.chars().map(|c| (c, s.style)));
+        }
+        cells.extend(gap.chars().map(|c| (c, Style::new())));
+        let n = cells.len();
+        let (hold, step) = (2000u128, 180u128);
+        let e = self.song_start.elapsed().as_millis() % (hold + step * n as u128);
+        let off = if e < hold { 0 } else { ((e - hold) / step) as usize };
+        let mut out: Vec<Span<'static>> = Vec::new();
+        for (c, st) in cells.iter().cycle().skip(off).take(n + w as usize) {
+            match out.last_mut() {
+                Some(l) if l.style == *st => l.content.to_mut().push(*c),
+                _ => out.push(Span::styled(c.to_string(), *st)),
+            }
+        }
+        Line::from(out)
+    }
+
+    /// El logo, en degradado, con un mensaje debajo.
+    fn draw_logo(&self, f: &mut Frame, area: Rect, msg: &str) {
+        let rows: &[&str] = if self.cfg.bar == Bar::Ascii { &LOGO_ASCII } else { &LOGO };
+        let w = rows[0].chars().count();
+        let mut lines: Vec<Line> = rows
+            .iter()
+            .map(|r| {
+                let spans: Vec<Span> = r
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| Span::styled(c.to_string(), Style::new().fg(self.gradient(i as f64 / w as f64)).bold()))
+                    .collect();
+                Line::from(spans).centered()
+            })
+            .collect();
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(self.tx(msg), Style::new().fg(self.theme.muted).italic()).centered());
+        let h = lines.len() as u16;
+        let [mid] = Layout::vertical([Constraint::Length(h)]).flex(Flex::Center).areas(area);
+        f.render_widget(Paragraph::new(lines), mid);
     }
 
     fn block(&self, focused: bool) -> Block<'static> {
@@ -333,12 +432,27 @@ impl App {
             title.push(Span::styled(format!("   … {l}"), Style::new().fg(t.muted).italic()));
         }
         title.push(Span::raw(" "));
-        let block = self.block(focused).title(Line::from(title));
+        let mut block = self.block(focused).title(Line::from(title));
+        // canción nueva: su nombre arriba a la derecha un momento, con un destello al entrar
+        if let (Some(at), Some(it)) = (self.splash, self.current()) {
+            let e = at.elapsed();
+            if self.cfg.motion && e < SPLASH {
+                let flash = e.as_millis() < 450;
+                let st = if flash {
+                    Style::new().fg(t.bg).bg(t.accent).bold()
+                } else {
+                    Style::new().fg(t.accent).bold()
+                };
+                let txt = format!(" {}  {} ", self.ic("\u{f0f74}", "♪"), it.title);
+                block = block.title_top(Line::styled(txt, st).right_aligned());
+            }
+        }
 
         if n == 0 {
             let msg = if self.loading.is_some() { self.s().loading } else { self.s().empty };
-            let p = Paragraph::new(Line::styled(self.tx(msg), Style::new().fg(t.muted).italic())).block(block);
-            return f.render_widget(p, area);
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            return self.draw_logo(f, inner, msg);
         }
 
         let queue_view = self.views.last().is_some_and(|v| v.queue);
@@ -352,7 +466,9 @@ impl App {
             .map(|(i, it)| {
                 let playing = if queue_view { qi == Some(i) } else { it.playable() && it.video_id == cur };
                 let played = queue_view && qi.is_some_and(|q| i < q);
-                let mark = if playing {
+                let mark = if playing && self.playing() && self.cfg.motion {
+                    Span::styled(self.eq(2), Style::new().fg(t.primary))
+                } else if playing {
                     Span::styled(self.ic(I_PLAY, "▶"), Style::new().fg(t.primary))
                 } else if !it.playable() {
                     let icon = match it.kind {
@@ -436,20 +552,20 @@ impl App {
         let it = self.current();
         let now = match it {
             Some(it) => {
-                let mut v = vec![
-                    Span::styled(
-                        format!(
-                            "{}  ",
-                            if self.paused || !self.loaded { self.ic(I_PLAY, "▶") } else { self.ic(I_PAUSE, "⏸") }
-                        ),
-                        Style::new().fg(t.primary),
-                    ),
-                    Span::styled(it.title.clone(), Style::new().fg(t.fg).bold()),
-                ];
+                let icon = if self.playing() { self.ic(I_PAUSE, "⏸") } else { self.ic(I_PLAY, "▶") };
+                let mut lead = vec![Span::styled(format!("{icon} "), Style::new().fg(t.primary))];
+                if self.cfg.motion {
+                    lead.push(Span::styled(format!("{} ", self.eq(4)), Style::new().fg(self.gradient(0.5))));
+                }
+                lead.push(Span::raw(" "));
+                let mut v = vec![Span::styled(it.title.clone(), Style::new().fg(t.fg).bold())];
                 if !it.artist.is_empty() {
                     v.push(Span::styled(format!("  ·  {}", it.artist), Style::new().fg(t.muted)));
                 }
-                Line::from(v)
+                // el icono y el ecualizador quietos; lo que se desplaza es el título
+                let lw = Line::from(lead.clone()).width() as u16;
+                lead.extend(self.marquee(v, left.width.saturating_sub(lw)).spans);
+                Line::from(lead)
             }
             None => Line::styled(self.tx(self.s().idle_hint), Style::new().fg(t.muted).italic()),
         };
@@ -468,16 +584,18 @@ impl App {
         } else {
             (String::new(), "")
         };
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("{l} "), Style::new().fg(t.muted)),
-                Span::styled(body, Style::new().fg(t.primary)),
-                Span::styled(head, Style::new().fg(t.primary).bold()),
-                Span::styled(rest.repeat(bw - done), Style::new().fg(t.border)),
-                Span::styled(format!(" {r}"), Style::new().fg(t.muted)),
-            ])),
-            prog,
-        );
+        // lo hecho en degradado del color principal al de acento, a lo ancho de toda la barra
+        let mut spans = vec![Span::styled(format!("{l} "), Style::new().fg(t.muted))];
+        let fg = |i: usize| self.gradient(i as f64 / bw.max(1) as f64);
+        if self.cfg.tint == Tint::Color && matches!((t.primary, t.accent), (Color::Rgb(..), Color::Rgb(..))) {
+            spans.extend(body.chars().enumerate().map(|(i, c)| Span::styled(c.to_string(), Style::new().fg(fg(i)))));
+        } else {
+            spans.push(Span::styled(body, Style::new().fg(t.primary)));
+        }
+        spans.push(Span::styled(head, Style::new().fg(fg(done)).bold()));
+        spans.push(Span::styled(rest.repeat(bw - done), Style::new().fg(t.border)));
+        spans.push(Span::styled(format!(" {r}"), Style::new().fg(t.muted)));
+        f.render_widget(Paragraph::new(Line::from(spans)), prog);
     }
 
     fn draw_footer(&self, f: &mut Frame, area: Rect) {
@@ -498,5 +616,20 @@ impl App {
             spans.push(Span::styled(format!(" {}  ", self.tx(d)), Style::new().fg(t.muted)));
         }
         f.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_colors() {
+        let (a, b) = (Color::Rgb(0, 100, 200), Color::Rgb(200, 100, 0));
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 1.0), b);
+        assert_eq!(mix(a, b, 0.5), Color::Rgb(100, 100, 100));
+        // colores de la terminal: sin degradado
+        assert_eq!(mix(Color::Blue, b, 0.5), Color::Blue);
     }
 }
