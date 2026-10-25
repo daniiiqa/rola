@@ -4,13 +4,21 @@
 //!     ytm --login    conecta tu cuenta (biblioteca, playlists, me gusta)
 
 mod api;
+mod config;
+mod hypr;
+mod i18n;
 mod mpv;
+mod settings;
 mod theme;
 mod ui;
 
 use api::{Api, Item, Kind};
+use config::Config;
+use i18n::{fill, Strings};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::path::PathBuf;
@@ -25,6 +33,8 @@ pub enum Ev {
     Loaded { seq: u64, title: String, reset: bool, res: Result<Vec<Item>, String> },
     Playlists(Vec<Item>),
     Radio { items: Vec<Item>, play: bool },
+    Lyrics { vid: String, res: Result<Option<(String, String)>, String> },
+    Cover { vid: String, img: image::DynamicImage },
     Notify(String, bool),
 }
 
@@ -46,6 +56,20 @@ enum Focus {
     Search,
     Side,
     Main,
+    Lyrics,
+}
+
+pub enum Lyrics {
+    Loading,
+    Missing,
+    Text(String, String), // letra, fuente
+    Err(String),
+}
+
+pub enum Popup {
+    Help,
+    Settings { sel: usize },
+    AddTo { item: Item, state: ListState },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -78,8 +102,10 @@ struct App {
     api: Api,
     tx: Sender<Ev>,
     mpv: mpv::Mpv,
+    cfg: Config,
     theme: theme::Theme,
     theme_mtime: Option<SystemTime>,
+    rounded: bool, // Hyprland redondea las ventanas (para los bordes «como Hyprland»)
     focus: Focus,
     input: String,
     side: Vec<(String, Side)>,
@@ -90,6 +116,16 @@ struct App {
     queue: Vec<Item>,
     qi: Option<usize>,
     added: usize, // canciones metidas con z detrás de la actual
+    loaded: bool, // mpv tiene la actual cargada (no al abrir con la cola restaurada)
+    resume: Option<(usize, f64)>, // dónde se quedó la sesión anterior
+    playlists: Vec<Item>,
+    lyrics_on: bool,
+    lyrics: Option<(String, Lyrics)>, // video_id → letra
+    lyrics_scroll: u16,
+    popup: Option<Popup>,
+    picker: Picker,
+    cover_on: bool,
+    cover: Option<(String, Option<StatefulProtocol>)>, // video_id → portada (None: cargando)
     pos: Option<f64>,
     dur: Option<f64>,
     paused: bool,
@@ -118,20 +154,23 @@ fn state_file() -> PathBuf {
 }
 
 impl App {
-    fn new(tx: Sender<Ev>) -> Result<App, String> {
+    fn new(tx: Sender<Ev>, picker: Picker) -> Result<App, String> {
         let st: Value = std::fs::read_to_string(state_file())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or(json!({}));
         let volume = st["volume"].as_i64().unwrap_or(70);
-        let mpv = mpv::Mpv::start(volume, tx.clone())?;
+        let cfg = Config::load();
+        let mpv = mpv::Mpv::start(volume, cfg.quality.ytdl_format(), tx.clone())?;
         let api = Api::new(&data_dir().join("auth.json"));
         let mut app = App {
             api,
             tx,
             mpv,
-            theme: theme::load(),
-            theme_mtime: theme::mtime(),
+            theme: theme::load(&cfg.theme, cfg.transparent, &cfg.wallust),
+            theme_mtime: theme::mtime(theme::source(&cfg.theme, &cfg.wallust).as_deref()),
+            rounded: hypr::rounding().is_none_or(|r| r > 0),
+            cfg,
             focus: Focus::Main,
             input: String::new(),
             side: Vec::new(),
@@ -142,6 +181,16 @@ impl App {
             queue: Vec::new(),
             qi: None,
             added: 0,
+            loaded: false,
+            resume: None,
+            playlists: Vec::new(),
+            lyrics_on: st["lyrics"].as_bool().unwrap_or(false),
+            lyrics: None,
+            lyrics_scroll: 0,
+            popup: None,
+            picker,
+            cover_on: st["cover"].as_bool().unwrap_or(true),
+            cover: None,
             pos: None,
             dur: None,
             paused: true,
@@ -159,15 +208,38 @@ impl App {
             quit: false,
         };
         app.fill_side(&[]);
-        if app.api.authed() {
-            let (api, tx) = (app.api.clone(), app.tx.clone());
+        if !app.cfg.restore {
+            return Ok(app.start());
+        }
+        app.queue = st["queue"].as_array().into_iter().flatten().filter_map(Item::from_json).collect();
+        if let Some(qi) = st["qi"].as_u64().map(|i| i as usize).filter(|&i| i < app.queue.len()) {
+            let pos = st["pos"].as_f64().unwrap_or(0.0);
+            app.qi = Some(qi);
+            app.resume = Some((qi, pos));
+            app.pos = Some(pos);
+            app.dur = parse_duration(&app.queue[qi].duration);
+            if app.lyrics_on {
+                app.fetch_lyrics();
+            }
+            app.fetch_cover();
+        }
+        Ok(app.start())
+    }
+
+    fn start(mut self) -> App {
+        if self.api.authed() {
+            let (api, tx) = (self.api.clone(), self.tx.clone());
             std::thread::spawn(move || match api.library_playlists() {
                 Ok(p) => drop(tx.send(Ev::Playlists(p))),
                 Err(e) => drop(tx.send(Ev::Notify(format!("playlists: {e}"), true))),
             });
         }
-        app.open("Inicio", Load::Home, true);
-        Ok(app)
+        self.open(self.s().home, Load::Home, true);
+        self
+    }
+
+    pub fn s(&self) -> &'static Strings {
+        self.cfg.lang.s()
     }
 
     fn save_state(&self) {
@@ -176,6 +248,11 @@ impl App {
             "shuffle": self.shuffle,
             "repeat": match self.repeat { Repeat::Off => "off", Repeat::All => "all", Repeat::One => "one" },
             "autoplay": self.autoplay,
+            "lyrics": self.lyrics_on,
+            "cover": self.cover_on,
+            "queue": self.queue.iter().map(Item::to_json).collect::<Vec<_>>(),
+            "qi": self.qi,
+            "pos": if self.loaded { self.pos } else { self.resume.map(|r| r.1) },
         });
         let f = state_file();
         if let Some(d) = f.parent() {
@@ -204,14 +281,15 @@ impl App {
 
     // ── barra lateral ──
     fn fill_side(&mut self, playlists: &[Item]) {
-        let mut s = vec![("\u{f02dc}  Inicio".to_string(), Side::Home)];
+        let t = self.s();
+        let mut s = vec![(t.home.to_string(), Side::Home)];
         if self.api.authed() {
-            s.push(("\u{f02d1}  Me gusta".into(), Side::Liked));
-            s.push(("\u{f02da}  Historial".into(), Side::History));
-            s.push(("\u{f0025}  Álbumes".into(), Side::Albums));
-            s.push(("\u{f0004}  Artistas".into(), Side::Artists));
+            s.push((t.liked.into(), Side::Liked));
+            s.push((t.history.into(), Side::History));
+            s.push((t.albums.into(), Side::Albums));
+            s.push((t.artists.into(), Side::Artists));
         }
-        s.push(("\u{f0cb8}  Cola".into(), Side::Queue));
+        s.push((t.queue.into(), Side::Queue));
         if !playlists.is_empty() {
             s.push((String::new(), Side::Sep));
             for p in playlists {
@@ -221,7 +299,7 @@ impl App {
             }
         } else if !self.api.authed() {
             s.push((String::new(), Side::Sep));
-            s.push(("sin cuenta: ytm --login".into(), Side::Hint));
+            s.push((t.no_account_hint.into(), Side::Hint));
         }
         self.side = s;
     }
@@ -242,10 +320,9 @@ impl App {
     }
 
     fn side_activate(&mut self) {
-        let Some((label, id)) = self.side_state.selected().and_then(|i| self.side.get(i)).cloned() else {
+        let Some((title, id)) = self.side_state.selected().and_then(|i| self.side.get(i)).cloned() else {
             return;
         };
-        let title = label.split_once("  ").map(|x| x.1.to_string()).unwrap_or(label);
         match id {
             Side::Home => self.open(&title, Load::Home, true),
             Side::Liked => self.open(&title, Load::Liked, true),
@@ -354,11 +431,186 @@ impl App {
 
     fn play_index(&mut self, i: usize) {
         let Some(vid) = self.queue.get(i).and_then(|x| x.video_id.clone()) else { return };
+        let start = self.resume.take().filter(|r| r.0 == i).map(|r| r.1);
         self.qi = Some(i);
         self.added = 0;
+        self.loaded = true;
         self.pos = None;
         self.dur = None;
-        self.mpv.load(&vid);
+        self.mpv.load(&vid, start);
+        if self.lyrics_on {
+            self.fetch_lyrics();
+        }
+        self.fetch_cover();
+    }
+
+    // ── portada ──
+    fn fetch_cover(&mut self) {
+        let Some(it) = self.current() else { return };
+        let (Some(vid), Some(url)) = (it.video_id.clone(), it.cover_url()) else { return };
+        if !self.cover_on || self.cover.as_ref().is_some_and(|(v, _)| *v == vid) {
+            return;
+        }
+        self.cover = Some((vid.clone(), None));
+        let (api, tx) = (self.api.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let Ok(img) = api.get_bytes(&url).and_then(|b| image::load_from_memory(&b).map_err(|e| e.to_string())) else {
+                return;
+            };
+            // hqdefault es 4:3 con franjas negras alrededor del 16:9
+            let img = if img.width() * 3 == img.height() * 4 {
+                let h = img.width() * 9 / 16;
+                img.crop_imm(0, (img.height() - h) / 2, img.width(), h)
+            } else {
+                img
+            };
+            // las miniaturas de video son 16:9; YouTube Music recorta el centro
+            let side = img.width().min(img.height());
+            let img = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side);
+            let _ = tx.send(Ev::Cover { vid, img });
+        });
+    }
+
+    /// Lo que se ve en la cola, o lo que está sonando si no se mira la cola.
+    pub fn queue_view(&self) -> bool {
+        self.focus == Focus::Main && self.views.last().is_some_and(|v| v.queue)
+    }
+
+    fn queue_remove(&mut self) {
+        let Some((i, it)) = self.selected() else { return };
+        self.queue.remove(i);
+        match self.qi {
+            Some(q) if i < q => self.qi = Some(q - 1),
+            Some(q) if i == q => {
+                self.resume = None;
+                if i >= self.queue.len() {
+                    self.qi = None;
+                    self.stop();
+                } else if self.loaded && !self.paused {
+                    self.play_index(i);
+                } else {
+                    self.stop();
+                    self.qi = Some(i);
+                    self.dur = parse_duration(&self.queue[i].duration);
+                }
+            }
+            Some(q) if i <= q + self.added => self.added -= 1,
+            _ => {}
+        }
+        let n = self.queue.len();
+        if let Some(v) = self.views.last_mut() {
+            v.state.select(Some(i.min(n.saturating_sub(1))));
+        }
+        self.notify(fill(self.s().removed, &[&it.title]), false);
+    }
+
+    fn queue_move(&mut self, d: isize) {
+        let Some((i, _)) = self.selected() else { return };
+        let j = i as isize + d;
+        if j < 0 || j as usize >= self.queue.len() {
+            return;
+        }
+        let j = j as usize;
+        self.queue.swap(i, j);
+        if self.qi == Some(i) {
+            self.qi = Some(j);
+            self.added = 0;
+        } else if self.qi == Some(j) {
+            self.qi = Some(i);
+            self.added = 0;
+        }
+        if let Some(v) = self.views.last_mut() {
+            v.state.select(Some(j));
+        }
+    }
+
+    fn stop(&mut self) {
+        if self.loaded {
+            self.mpv.cmd(json!(["stop"]));
+        }
+        self.loaded = false;
+        self.pos = None;
+        self.dur = None;
+    }
+
+    // ── letra ──
+    fn fetch_lyrics(&mut self) {
+        let Some(vid) = self.current().and_then(|x| x.video_id.clone()) else { return };
+        if self.lyrics.as_ref().is_some_and(|(v, _)| *v == vid) {
+            return;
+        }
+        self.lyrics = Some((vid.clone(), Lyrics::Loading));
+        self.lyrics_scroll = 0;
+        let (api, tx) = (self.api.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let res = api.lyrics(&vid);
+            let _ = tx.send(Ev::Lyrics { vid, res });
+        });
+    }
+
+    fn lyrics_scroll(&mut self, d: isize) {
+        let n = match &self.lyrics {
+            Some((_, Lyrics::Text(t, _))) => t.lines().count(),
+            _ => 0,
+        };
+        let s = (self.lyrics_scroll as isize + d).clamp(0, n.saturating_sub(1) as isize);
+        self.lyrics_scroll = s as u16;
+    }
+
+    // ── añadir a playlist ──
+    /// Las de la biblioteca menos las automáticas (me gusta, episodios).
+    pub fn own_playlists(&self) -> Vec<Item> {
+        self.playlists
+            .iter()
+            .filter(|p| !matches!(p.browse_id.as_deref(), Some("VLLM" | "VLSE") | None))
+            .cloned()
+            .collect()
+    }
+
+    fn open_add_to(&mut self) {
+        let Some(item) = self.target() else { return };
+        if !self.api.authed() {
+            return self.notify(self.s().need_account, true);
+        }
+        if self.own_playlists().is_empty() {
+            return self.notify(self.s().no_playlists, true);
+        }
+        self.popup = Some(Popup::AddTo { item, state: ListState::default().with_selected(Some(0)) });
+    }
+
+    fn popup_key(&mut self, k: KeyEvent) {
+        let n = self.own_playlists().len();
+        let Some(popup) = &mut self.popup else { return };
+        let Popup::AddTo { item, state } = popup else {
+            if matches!(popup, Popup::Settings { .. }) {
+                return self.settings_key(k);
+            }
+            self.popup = None; // la ayuda se cierra con cualquier tecla
+            return;
+        };
+        let i = state.selected().unwrap_or(0);
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.popup = None,
+            KeyCode::Char('j') | KeyCode::Down => state.select(Some((i + 1).min(n.saturating_sub(1)))),
+            KeyCode::Char('k') | KeyCode::Up => state.select(Some(i.saturating_sub(1))),
+            KeyCode::Char('g') | KeyCode::Home => state.select(Some(0)),
+            KeyCode::Char('G') | KeyCode::End => state.select(Some(n.saturating_sub(1))),
+            KeyCode::Enter => {
+                let item = item.clone();
+                self.popup = None;
+                let Some(pl) = self.own_playlists().into_iter().nth(i) else { return };
+                let (api, tx) = (self.api.clone(), self.tx.clone());
+                std::thread::spawn(move || {
+                    let res = api.add_to_playlist(pl.browse_id.as_deref().unwrap_or(""), item.video_id.as_deref().unwrap_or(""));
+                    let ev = match res {
+                        Ok(()) => Ev::Notify(format!("{} → {}", item.title, pl.title), false),
+                        Err(e) => Ev::Notify(format!("{}: {e}", pl.title), true),
+                    };
+                    let _ = tx.send(ev);
+                });
+            }
+            _ => {}
+        }
     }
 
     fn advance(&mut self, auto: bool) {
@@ -394,8 +646,9 @@ impl App {
             Ev::Key(k) => self.key(k),
             Ev::Resize => {}
             Ev::Prop(name, data) => match name.as_str() {
-                "time-pos" => self.pos = data.as_f64(),
-                "duration" => self.dur = data.as_f64(),
+                // sin nada cargado mpv dice null y se perdería la posición restaurada
+                "time-pos" if self.loaded => self.pos = data.as_f64(),
+                "duration" if self.loaded => self.dur = data.as_f64(),
                 "pause" => self.paused = data.as_bool().unwrap_or(true),
                 "volume" => {
                     if let Some(v) = data.as_f64() {
@@ -408,10 +661,10 @@ impl App {
                 if error {
                     self.errors += 1;
                     let t = self.current().map(|x| x.title.clone()).unwrap_or_default();
-                    self.notify(format!("no se pudo reproducir: {t}"), true);
+                    self.notify(fill(self.s().play_failed, &[&t]), true);
                     if self.errors >= 3 {
                         self.errors = 0;
-                        return self.notify("varios fallos seguidos; ¿yt-dlp desactualizado?", true);
+                        return self.notify(self.s().many_errors, true);
                     }
                 } else {
                     self.errors = 0;
@@ -434,7 +687,28 @@ impl App {
                     Err(e) => self.notify(format!("{title}: {e}"), true),
                 }
             }
-            Ev::Playlists(p) => self.fill_side(&p),
+            Ev::Playlists(p) => {
+                self.fill_side(&p);
+                self.playlists = p;
+            }
+            Ev::Cover { vid, img } => {
+                if let Some((v, c)) = &mut self.cover {
+                    if *v == vid {
+                        *c = Some(self.picker.new_resize_protocol(img));
+                    }
+                }
+            }
+            Ev::Lyrics { vid, res } => {
+                if let Some((v, l)) = &mut self.lyrics {
+                    if *v == vid {
+                        *l = match res {
+                            Ok(Some((text, source))) => Lyrics::Text(text, source),
+                            Ok(None) => Lyrics::Missing,
+                            Err(e) => Lyrics::Err(e),
+                        };
+                    }
+                }
+            }
             Ev::Radio { items, play } => {
                 let have: std::collections::HashSet<_> = self.queue.iter().map(|x| x.video_id.clone()).collect();
                 let start = self.queue.len();
@@ -455,6 +729,9 @@ impl App {
         if ctrl && k.code == KeyCode::Char('c') {
             self.quit = true;
             return;
+        }
+        if self.popup.is_some() {
+            return self.popup_key(k);
         }
         if self.focus == Focus::Search {
             match k.code {
@@ -483,9 +760,37 @@ impl App {
         match k.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('/') => self.focus = Focus::Search,
-            KeyCode::Tab => self.focus = if self.focus == Focus::Side { Focus::Main } else { Focus::Side },
-            KeyCode::Char('h') | KeyCode::Left => self.focus = Focus::Side,
-            KeyCode::Char('l') | KeyCode::Right => self.focus = Focus::Main,
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::Side => Focus::Main,
+                    Focus::Main if self.lyrics_on => Focus::Lyrics,
+                    _ => Focus::Side,
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.focus = if self.focus == Focus::Lyrics { Focus::Main } else { Focus::Side }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.focus = if self.focus == Focus::Main && self.lyrics_on { Focus::Lyrics } else { Focus::Main }
+            }
+            KeyCode::Char('?') => self.popup = Some(Popup::Help),
+            KeyCode::Char('o') | KeyCode::Char(',') => self.popup = Some(Popup::Settings { sel: 0 }),
+            KeyCode::Char('y') => {
+                self.lyrics_on = !self.lyrics_on;
+                if self.lyrics_on {
+                    self.fetch_lyrics();
+                } else if self.focus == Focus::Lyrics {
+                    self.focus = Focus::Main;
+                }
+            }
+            KeyCode::Char('P') => self.open_add_to(),
+            KeyCode::Char('c') => {
+                self.cover_on = !self.cover_on;
+                self.fetch_cover();
+            }
+            KeyCode::Char('d') | KeyCode::Delete if !ctrl && self.queue_view() => self.queue_remove(),
+            KeyCode::Char('J') if self.queue_view() => self.queue_move(1),
+            KeyCode::Char('K') if self.queue_view() => self.queue_move(-1),
             KeyCode::Char('j') | KeyCode::Down => self.nav(1),
             KeyCode::Char('k') | KeyCode::Up => self.nav(-1),
             KeyCode::PageDown => self.nav(page),
@@ -494,13 +799,11 @@ impl App {
             KeyCode::Char('u') if ctrl => self.nav(-page),
             KeyCode::Char('g') | KeyCode::Home => self.nav(-100_000),
             KeyCode::Char('G') | KeyCode::End => self.nav(100_000),
-            KeyCode::Enter => {
-                if self.focus == Focus::Side {
-                    self.side_activate()
-                } else {
-                    self.activate()
-                }
-            }
+            KeyCode::Enter => match self.focus {
+                Focus::Side => self.side_activate(),
+                Focus::Main => self.activate(),
+                _ => {}
+            },
             KeyCode::Backspace | KeyCode::Esc => {
                 if self.views.len() > 1 {
                     self.views.pop();
@@ -511,6 +814,8 @@ impl App {
             KeyCode::Char(' ') => {
                 if self.qi.is_none() {
                     self.activate();
+                } else if !self.loaded {
+                    self.play_index(self.qi.unwrap_or(0));
                 } else {
                     self.mpv.cmd(json!(["cycle", "pause"]));
                 }
@@ -518,16 +823,21 @@ impl App {
             KeyCode::Char('n') => self.advance(false),
             KeyCode::Char('p') => {
                 let qi = self.qi.unwrap_or(0);
-                if self.pos.unwrap_or(0.0) > 3.0 || qi == 0 {
+                if !self.loaded {
+                    self.resume = None;
+                }
+                if (self.pos.unwrap_or(0.0) > 3.0 || qi == 0) && self.loaded {
                     self.mpv.cmd(json!(["seek", 0, "absolute"]));
+                } else if self.pos.unwrap_or(0.0) > 3.0 || qi == 0 {
+                    self.play_index(qi);
                 } else {
                     self.play_index(qi - 1);
                 }
             }
-            KeyCode::Char('<') => self.mpv.cmd(json!(["seek", -5, "relative"])),
-            KeyCode::Char('>') => self.mpv.cmd(json!(["seek", 5, "relative"])),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.set_volume(5),
-            KeyCode::Char('-') => self.set_volume(-5),
+            KeyCode::Char('<') => self.mpv.cmd(json!(["seek", -self.cfg.seek, "relative"])),
+            KeyCode::Char('>') => self.mpv.cmd(json!(["seek", self.cfg.seek, "relative"])),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.set_volume(self.cfg.vol_step),
+            KeyCode::Char('-') => self.set_volume(-self.cfg.vol_step),
             KeyCode::Char('s') => {
                 self.shuffle = !self.shuffle;
                 if let (true, Some(qi)) = (self.shuffle, self.qi) {
@@ -544,18 +854,14 @@ impl App {
                     Repeat::One => Repeat::Off,
                 }
             }
-            KeyCode::Char('a') => {
-                self.autoplay = !self.autoplay;
-                let m = if self.autoplay { "activado" } else { "apagado" };
-                self.notify(format!("autoplay (radio al acabar la cola) {m}"), false);
-            }
+            KeyCode::Char('a') => self.toggle_autoplay(),
             KeyCode::Char('z') => self.enqueue(),
             KeyCode::Char('R') => {
                 if let Some((_, it)) = self.selected().filter(|(_, it)| it.playable()) {
                     self.queue = vec![it.clone()];
                     self.play_index(0);
                     self.radio(&it, false);
-                    self.notify(format!("radio de {}", it.title), false);
+                    self.notify(fill(self.s().radio_of, &[&it.title]), false);
                 }
             }
             KeyCode::Char('L') => self.like(),
@@ -564,12 +870,14 @@ impl App {
     }
 
     fn nav(&mut self, d: isize) {
-        if self.focus == Focus::Side {
-            for _ in 0..d.unsigned_abs().min(self.side.len()) {
-                self.side_move(d);
+        match self.focus {
+            Focus::Side => {
+                for _ in 0..d.unsigned_abs().min(self.side.len()) {
+                    self.side_move(d);
+                }
             }
-        } else {
-            self.table_move(d);
+            Focus::Lyrics => self.lyrics_scroll(d),
+            _ => self.table_move(d),
         }
     }
 
@@ -586,40 +894,63 @@ impl App {
         };
         self.added += 1;
         let at = (qi + self.added).min(self.queue.len());
-        self.notify(format!("a la cola: {}", it.title), false);
+        self.notify(fill(self.s().queued, &[&it.title]), false);
         self.queue.insert(at, it);
     }
 
-    fn like(&mut self) {
+    /// Canción seleccionada en la tabla, o la que suena.
+    fn target(&self) -> Option<Item> {
         let sel = if self.focus == Focus::Main { self.selected().map(|x| x.1) } else { None };
-        let Some(it) = sel.filter(Item::playable).or_else(|| self.current().cloned()) else { return };
+        sel.filter(Item::playable).or_else(|| self.current().cloned())
+    }
+
+    fn like(&mut self) {
+        let Some(it) = self.target() else { return };
         if !self.api.authed() {
-            return self.notify("necesitas cuenta: ytm --login", true);
+            return self.notify(self.s().need_account, true);
         }
-        let (api, tx) = (self.api.clone(), self.tx.clone());
+        let (api, tx, s) = (self.api.clone(), self.tx.clone(), self.s());
         std::thread::spawn(move || {
             let ev = match api.like(it.video_id.as_deref().unwrap_or("")) {
                 Ok(()) => Ev::Notify(format!("\u{f02d1}  {}", it.title), false),
-                Err(e) => Ev::Notify(format!("me gusta: {e}"), true),
+                Err(e) => Ev::Notify(fill(s.like, &[&e]), true),
             };
             let _ = tx.send(ev);
         });
     }
 
+    fn toggle_autoplay(&mut self) {
+        self.autoplay = !self.autoplay;
+        let s = self.s();
+        self.notify(if self.autoplay { s.autoplay_on } else { s.autoplay_off }, false);
+    }
+
+    fn reload_theme(&mut self) {
+        let c = &self.cfg;
+        self.theme = theme::load(&c.theme, c.transparent, &c.wallust);
+        self.theme_mtime = theme::mtime(theme::source(&c.theme, &c.wallust).as_deref());
+    }
+
     fn tick(&mut self) {
-        let m = theme::mtime();
+        let m = theme::mtime(theme::source(&self.cfg.theme, &self.cfg.wallust).as_deref());
         if m != self.theme_mtime {
-            self.theme_mtime = m;
-            self.theme = theme::load();
+            self.reload_theme();
         }
-        if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(4)) {
+        if self.cfg.borders == config::Borders::Auto {
+            self.rounded = hypr::rounding().is_none_or(|r| r > 0);
+        }
+        if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {
             self.note = None;
         }
     }
 }
 
-fn run(rx: Receiver<Ev>, mut app: App) -> std::io::Result<()> {
-    let mut term = ratatui::init();
+/// "3:45" / "1:02:03" → segundos.
+fn parse_duration(s: &str) -> Option<f64> {
+    s.split(':').try_fold(0.0, |acc, p| p.parse::<f64>().ok().map(|n| acc * 60.0 + n))
+}
+
+fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> std::io::Result<()> {
     let mut last_draw = Instant::now() - Duration::from_secs(1);
     let mut last_tick = Instant::now();
     let res = loop {
@@ -658,34 +989,25 @@ fn run(rx: Receiver<Ev>, mut app: App) -> std::io::Result<()> {
 }
 
 fn login() {
-    println!(
-        "Conectar tu cuenta de YouTube Music:
-
-  1. Abre https://music.youtube.com con tu sesión iniciada.
-  2. F12 → pestaña Red (Network) → filtra por  browse
-  3. Haz scroll o cambia de página para que aparezca una petición POST \"browse\".
-  4. Clic derecho en ella → Copiar → Copiar encabezados de la petición
-     (Firefox/Zen: \"Copiar encabezados de solicitud\").
-  5. Pégalos aquí y termina con Enter y luego Ctrl+D.
-"
-    );
+    let s = Config::load().lang.s();
+    println!("{}", s.login_intro);
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
     let Some(auth) = api::parse_headers(&raw) else {
-        eprintln!("\nno encontré la cookie con SAPISID en lo pegado; ¿copiaste los headers de la petición?");
+        eprintln!("{}", s.login_no_cookie);
         std::process::exit(1);
     };
     let dir = data_dir();
     let file = dir.join("auth.json");
     if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, auth.to_string())) {
-        eprintln!("no se pudo guardar {}: {e}", file.display());
+        eprintln!("{}", fill(s.login_save_failed, &[&file.display().to_string(), &e.to_string()]));
         std::process::exit(1);
     }
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     match Api::new(&file).library_playlists() {
-        Ok(p) => println!("\nlisto: {} playlists en tu biblioteca. Guardado en {}", p.len(), file.display()),
-        Err(e) => println!("\nguardado en {}, pero la prueba falló: {e}", file.display()),
+        Ok(p) => println!("{}", fill(s.login_ok, &[&p.len().to_string(), &file.display().to_string()])),
+        Err(e) => println!("{}", fill(s.login_test_failed, &[&file.display().to_string(), &e])),
     }
 }
 
@@ -695,13 +1017,18 @@ fn main() {
         return login();
     }
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("ytm — YouTube Music en la terminal\n\n  ytm            abre la app\n  ytm --login    conecta tu cuenta");
+        println!("{}", Config::load().lang.s().cli_help);
         return;
     }
     let (tx, rx) = mpsc::channel();
-    let app = match App::new(tx.clone()) {
+    let term = ratatui::init();
+    // pregunta a la terminal qué protocolo de imágenes habla (kitty, sixel…);
+    // tiene que ir antes de que el hilo de teclas empiece a leer stdin
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+    let app = match App::new(tx.clone(), picker) {
         Ok(a) => a,
         Err(e) => {
+            ratatui::restore();
             eprintln!("ytm: {e}");
             std::process::exit(1);
         }
@@ -717,7 +1044,7 @@ fn main() {
             break;
         }
     });
-    if let Err(e) = run(rx, app) {
+    if let Err(e) = run(rx, app, term) {
         eprintln!("ytm: {e}");
     }
 }

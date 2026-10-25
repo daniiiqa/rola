@@ -18,7 +18,7 @@ pub struct Mpv {
 }
 
 impl Mpv {
-    pub fn start(volume: i64, tx: Sender<Ev>) -> Result<Mpv, String> {
+    pub fn start(volume: i64, format: &str, tx: Sender<Ev>) -> Result<Mpv, String> {
         let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
         // sockets de sesiones que murieron sin limpiar (terminal cerrada a la mala)
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
@@ -38,12 +38,12 @@ impl Mpv {
             "--no-terminal",
             "--force-window=no",
             "--title=ytm",
-            "--ytdl-format=bestaudio/best",
             // el cliente por defecto de yt-dlp da 403 al stremear; web_music no
             "--ytdl-raw-options-append=extractor-args=youtube:player_client=web_music",
         ])
         .arg(format!("--input-ipc-server={}", path.display()))
         .arg(format!("--volume={volume}"))
+        .arg(format!("--ytdl-format={format}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -97,8 +97,13 @@ impl Mpv {
         let _ = writeln!(self.sock, "{}", json!({ "command": args }));
     }
 
-    pub fn load(&mut self, video_id: &str) {
-        self.cmd(json!(["loadfile", format!("https://music.youtube.com/watch?v={video_id}"), "replace"]));
+    pub fn load(&mut self, video_id: &str, start: Option<f64>) {
+        let url = format!("https://music.youtube.com/watch?v={video_id}");
+        match start {
+            // loadfile url flags index options (mpv ≥ 0.38)
+            Some(t) if t > 1.0 => self.cmd(json!(["loadfile", url, "replace", -1, format!("start={t:.0}")])),
+            _ => self.cmd(json!(["loadfile", url, "replace"])),
+        }
         self.cmd(json!(["set_property", "pause", false]));
     }
 }

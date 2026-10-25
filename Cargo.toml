@@ -1,6 +1,6 @@
 [package]
 name = "ytm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "YouTube Music en la terminal, al estilo spotify-tui"
 
@@ -10,6 +10,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 ureq = "2"
 sha1_smol = "1"
 libc = "0.2"
+ratatui-image = { version = "8.1", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [profile.release]
 lto = true

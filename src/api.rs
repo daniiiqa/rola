@@ -32,11 +32,67 @@ pub struct Item {
     pub duration: String,
     pub video_id: Option<String>,
     pub browse_id: Option<String>,
+    pub thumb: String,
 }
 
 impl Item {
     pub fn playable(&self) -> bool {
         matches!(self.kind, Kind::Song | Kind::Video) && self.video_id.is_some()
+    }
+
+    /// Portada grande. Las de googleusercontent llevan el tamaño en la URL;
+    /// si no hay (cola guardada por una versión vieja), la miniatura del video.
+    pub fn cover_url(&self) -> Option<String> {
+        if let Some((base, _)) = self.thumb.split_once("=w").filter(|_| self.thumb.contains("googleusercontent")) {
+            return Some(format!("{base}=w544-h544-l90-rj"));
+        }
+        if !self.thumb.is_empty() {
+            return Some(self.thumb.clone());
+        }
+        self.video_id.as_ref().map(|v| format!("https://i.ytimg.com/vi/{v}/hqdefault.jpg"))
+    }
+
+    /// Para guardar la cola entre sesiones.
+    pub fn to_json(&self) -> Value {
+        let kind = match self.kind {
+            Kind::Song => "song",
+            Kind::Video => "video",
+            Kind::Album => "album",
+            Kind::Artist => "artist",
+            Kind::Playlist => "playlist",
+        };
+        json!({
+            "kind": kind,
+            "title": self.title,
+            "artist": self.artist,
+            "album": self.album,
+            "duration": self.duration,
+            "video_id": self.video_id,
+            "browse_id": self.browse_id,
+            "thumb": self.thumb,
+        })
+    }
+
+    pub fn from_json(v: &Value) -> Option<Item> {
+        let kind = match v["kind"].as_str()? {
+            "song" => Kind::Song,
+            "video" => Kind::Video,
+            "album" => Kind::Album,
+            "artist" => Kind::Artist,
+            "playlist" => Kind::Playlist,
+            _ => return None,
+        };
+        let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+        Some(Item {
+            kind,
+            title: s("title"),
+            artist: s("artist"),
+            album: s("album"),
+            duration: s("duration"),
+            video_id: v["video_id"].as_str().map(String::from),
+            browse_id: v["browse_id"].as_str().map(String::from),
+            thumb: s("thumb"),
+        })
     }
 }
 
@@ -158,11 +214,15 @@ impl Api {
     pub fn album(&self, id: &str) -> Result<Vec<Item>, String> {
         let (v, mut items) = self.browse(id, 0)?;
         items.retain(|i| i.playable());
-        let (title, artist) = match find_key(&v, "musicResponsiveHeaderRenderer") {
-            Some(h) => (runs_text(&h["title"]), runs_text(&h["straplineTextOne"])),
-            None => (String::new(), String::new()),
+        let (title, artist, thumb) = match find_key(&v, "musicResponsiveHeaderRenderer") {
+            Some(h) => (runs_text(&h["title"]), runs_text(&h["straplineTextOne"]), thumb_of(&h["thumbnail"])),
+            None => Default::default(),
         };
         for it in &mut items {
+            // las filas del álbum no traen portada; la del encabezado vale para todas
+            if it.thumb.is_empty() {
+                it.thumb = thumb.clone();
+            }
             if it.artist.is_empty() {
                 it.artist = artist.clone();
             }
@@ -247,8 +307,50 @@ impl Api {
             .collect())
     }
 
+    pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+        let resp = self.agent.get(url).call().map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        use std::io::Read;
+        resp.into_reader().take(8 << 20).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        Ok(buf)
+    }
+
     pub fn like(&self, video_id: &str) -> Result<(), String> {
         self.post("like/like", json!({ "target": { "videoId": video_id } })).map(|_| ())
+    }
+
+    /// Letra (texto plano) y su fuente; None si YouTube no tiene. La pestaña
+    /// "Lyrics" del panel de reproducción apunta a un browseId MPLY….
+    pub fn lyrics(&self, video_id: &str) -> Result<Option<(String, String)>, String> {
+        let v = self.post("next", json!({ "videoId": video_id, "isAudioOnly": true }))?;
+        let Some(id) = find_browse_id(&v, "MPLY") else { return Ok(None) };
+        let v = self.post("browse", json!({ "browseId": id }))?;
+        let Some(shelf) = find_key(&v, "musicDescriptionShelfRenderer") else { return Ok(None) };
+        let text = runs_text(&shelf["description"]);
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some((text, runs_text(&shelf["footer"]))))
+    }
+
+    /// Mete una canción en una playlist propia (browseId con o sin VL).
+    pub fn add_to_playlist(&self, playlist: &str, video_id: &str) -> Result<(), String> {
+        let id = playlist.strip_prefix("VL").unwrap_or(playlist);
+        let v = self.post(
+            "browse/edit_playlist",
+            json!({
+                "playlistId": id,
+                "actions": [{
+                    "action": "ACTION_ADD_VIDEO",
+                    "addedVideoId": video_id,
+                    "dedupeOption": "DEDUPE_OPTION_SKIP",
+                }],
+            }),
+        )?;
+        match v["status"].as_str() {
+            Some("STATUS_SUCCEEDED") | None => Ok(()),
+            Some(s) => Err(s.to_string()),
+        }
     }
 }
 
@@ -348,6 +450,19 @@ fn find_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     }
 }
 
+fn find_browse_id(v: &Value, prefix: &str) -> Option<String> {
+    match v {
+        Value::Object(m) => m
+            .get("browseId")
+            .and_then(Value::as_str)
+            .filter(|s| s.starts_with(prefix))
+            .map(String::from)
+            .or_else(|| m.values().find_map(|x| find_browse_id(x, prefix))),
+        Value::Array(a) => a.iter().find_map(|x| find_browse_id(x, prefix)),
+        _ => None,
+    }
+}
+
 /// Último token de continuación (los nuevos van en continuationItemRenderer).
 fn continuation(v: &Value) -> Option<String> {
     fn go(v: &Value, last: &mut Option<String>) {
@@ -437,6 +552,14 @@ impl Meta {
     }
 }
 
+/// La miniatura más grande del renderer (vienen de menor a mayor).
+fn thumb_of(r: &Value) -> String {
+    find_key(r, "thumbnails")
+        .and_then(|t| t.as_array()?.last()?["url"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 fn finish(kind: Kind, title: String, meta: Meta, video_id: Option<String>, browse_id: Option<String>) -> Item {
     let browse_id = match (kind, browse_id) {
         (Kind::Playlist, Some(b)) if !b.starts_with("VL") => Some(format!("VL{b}")),
@@ -450,6 +573,7 @@ fn finish(kind: Kind, title: String, meta: Meta, video_id: Option<String>, brows
         title,
         video_id,
         browse_id,
+        thumb: String::new(),
     }
 }
 
@@ -461,6 +585,10 @@ fn video_kind(watch: &Value) -> Kind {
 }
 
 fn parse_row(r: &Value) -> Option<Item> {
+    parse_row_bare(r).map(|it| Item { thumb: thumb_of(&r["thumbnail"]), ..it })
+}
+
+fn parse_row_bare(r: &Value) -> Option<Item> {
     let cols: Vec<&[Value]> = r["flexColumns"]
         .as_array()?
         .iter()
@@ -492,6 +620,10 @@ fn parse_row(r: &Value) -> Option<Item> {
 }
 
 fn parse_card(r: &Value) -> Option<Item> {
+    parse_card_bare(r).map(|it| Item { thumb: thumb_of(&r["thumbnailRenderer"]), ..it })
+}
+
+fn parse_card_bare(r: &Value) -> Option<Item> {
     let title = runs_text(&r["title"]);
     let mut meta = Meta::default();
     meta.take(runs(&r["subtitle"]), true);
@@ -507,6 +639,10 @@ fn parse_card(r: &Value) -> Option<Item> {
 }
 
 fn parse_panel(r: &Value) -> Option<Item> {
+    parse_panel_bare(r).map(|it| Item { thumb: thumb_of(&r["thumbnail"]), ..it })
+}
+
+fn parse_panel_bare(r: &Value) -> Option<Item> {
     let vid = r["videoId"].as_str()?;
     let mut meta = Meta::default();
     meta.take(runs(&r["longBylineText"]), true);
@@ -527,7 +663,7 @@ mod tests {
     fn show(label: &str, items: &[Item]) {
         println!("── {label}: {}", items.len());
         for i in items.iter().take(6) {
-            println!("  {:?} | {} | {} | {} | {} | {:?} {:?}", i.kind, i.title, i.artist, i.album, i.duration, i.video_id, i.browse_id);
+            println!("  {:?} | {} | {} | {} | {} | {:?} {:?} {}", i.kind, i.title, i.artist, i.album, i.duration, i.video_id, i.browse_id, i.thumb);
         }
     }
 
@@ -548,6 +684,32 @@ mod tests {
         let song = s.iter().find(|i| i.playable()).unwrap();
         show("radio", &a.radio(song.video_id.as_ref().unwrap()).unwrap());
         show("home", &a.home().unwrap());
+        let url = song.cover_url().unwrap();
+        let img = image::load_from_memory(&a.get_bytes(&url).unwrap()).unwrap();
+        println!("── cover {}x{} {url}", img.width(), img.height());
+        // Get Lucky; no todas las canciones tienen letra
+        let (text, source) = a.lyrics("5NV6Rdv1a3I").unwrap().expect("sin letra");
+        println!("── lyrics ({source}):\n{}", text.lines().take(6).collect::<Vec<_>>().join("\n"));
+    }
+
+    #[test]
+    fn item_roundtrip() {
+        let it = Item {
+            kind: Kind::Video,
+            title: "t".into(),
+            artist: "a".into(),
+            album: String::new(),
+            duration: "3:21".into(),
+            video_id: Some("abc".into()),
+            browse_id: None,
+            thumb: "https://lh3.googleusercontent.com/x=w60-h60-l90-rj".into(),
+        };
+        let back = Item::from_json(&it.to_json()).unwrap();
+        assert_eq!(back.kind, Kind::Video);
+        assert_eq!(back.video_id.as_deref(), Some("abc"));
+        assert_eq!(back.duration, "3:21");
+        assert_eq!(back.browse_id, None);
+        assert_eq!(back.cover_url().unwrap(), "https://lh3.googleusercontent.com/x=w544-h544-l90-rj");
     }
 
     #[test]
