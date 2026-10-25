@@ -900,9 +900,13 @@ impl App {
                     Ok(items) => items,
                     Err(e) => return self.notify(format!("radio: {e}"), true),
                 };
-                let have: std::collections::HashSet<_> = self.queue.iter().map(|x| x.video_id.clone()).collect();
                 let start = self.queue.len();
-                self.queue.extend(items.into_iter().filter(|x| !have.contains(&x.video_id)));
+                // otra versión de algo que ya está (su videoclip, por ejemplo) tampoco
+                for x in items {
+                    if !self.queue.iter().any(|q| q.video_id == x.video_id || q.same_song(&x)) {
+                        self.queue.push(x);
+                    }
+                }
                 if play && self.queue.len() > start {
                     self.play_index(start);
                 }

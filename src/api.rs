@@ -36,6 +36,18 @@ pub struct Item {
 }
 
 impl Item {
+    /// La misma canción aunque sea otra versión (la canción y su videoclip):
+    /// mismo título y algún artista en común (o uno que empieza como el otro:
+    /// «Eslabon» y «Eslabon Armado»), sin mirar mayúsculas ni signos.
+    pub fn same_song(&self, o: &Item) -> bool {
+        fn norm(s: &str) -> String {
+            s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+        }
+        let artists = |s: &str| s.split([',', '&']).map(norm).filter(|a| !a.is_empty()).collect::<Vec<_>>();
+        let (a, b) = (artists(&self.artist), artists(&o.artist));
+        norm(&self.title) == norm(&o.title) && (a.is_empty() || b.is_empty() || a.iter().any(|x| b.iter().any(|y| x.starts_with(y.as_str()) || y.starts_with(x.as_str()))))
+    }
+
     pub fn playable(&self) -> bool {
         matches!(self.kind, Kind::Song | Kind::Video) && self.video_id.is_some()
     }
@@ -300,11 +312,13 @@ impl Api {
                 "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
             }),
         )?;
-        let mut seen = std::collections::HashSet::new();
-        Ok(parse_items(&v)
-            .into_iter()
-            .filter(|i| i.playable() && seen.insert(i.video_id.clone()))
-            .collect())
+        let mut out: Vec<Item> = Vec::new();
+        for i in parse_items(&v).into_iter().filter(Item::playable) {
+            if !out.iter().any(|o| o.video_id == i.video_id || o.same_song(&i)) {
+                out.push(i);
+            }
+        }
+        Ok(out)
     }
 
     pub fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
@@ -429,6 +443,18 @@ fn walk(v: &Value, out: &mut Vec<Item>) {
                     "musicResponsiveListItemRenderer" => parse_row(val),
                     "musicTwoRowItemRenderer" => parse_card(val),
                     "playlistPanelVideoRenderer" => parse_panel(val),
+                    // con cuenta, la radio trae cada canción dos veces: la
+                    // canción y su videoclip; una sola, mejor la canción (con álbum)
+                    "playlistPanelVideoWrapperRenderer" => {
+                        let mut all: Vec<Item> = parse_panel(&val["primaryRenderer"]["playlistPanelVideoRenderer"])
+                            .into_iter()
+                            .collect();
+                        for c in val["counterpart"].as_array().into_iter().flatten() {
+                            all.extend(parse_panel(&c["counterpartRenderer"]["playlistPanelVideoRenderer"]));
+                        }
+                        let i = all.iter().position(|x| x.kind == Kind::Song).unwrap_or(0);
+                        (!all.is_empty()).then(|| all.swap_remove(i))
+                    }
                     _ => {
                         walk(val, out);
                         continue;
@@ -693,6 +719,45 @@ mod tests {
     }
 
     #[test]
+    fn radio_keeps_one_version() {
+        let panel = |vid: &str, album: bool| {
+            let mut runs = vec![json!({"text": "Junior H", "navigationEndpoint": {"browseEndpoint": {"browseId": "UC1", "browseEndpointContextSupportedConfigs": {"browseEndpointContextMusicConfig": {"pageType": "MUSIC_PAGE_TYPE_ARTIST"}}}}})];
+            if album {
+                runs.push(json!({"text": " • "}));
+                runs.push(json!({"text": "$AD BOYZ", "navigationEndpoint": {"browseEndpoint": {"browseId": "MPRE1", "browseEndpointContextSupportedConfigs": {"browseEndpointContextMusicConfig": {"pageType": "MUSIC_PAGE_TYPE_ALBUM"}}}}}));
+            }
+            let mvt = if album { "MUSIC_VIDEO_TYPE_ATV" } else { "MUSIC_VIDEO_TYPE_OMV" };
+            json!({"playlistPanelVideoRenderer": {
+                "title": {"runs": [{"text": "PIÉNSALO"}]},
+                "longBylineText": {"runs": runs},
+                "lengthText": {"runs": [{"text": "4:01"}]},
+                "videoId": vid,
+                "navigationEndpoint": {"watchEndpoint": {"videoId": vid, "watchEndpointMusicSupportedConfigs": {"watchEndpointMusicConfig": {"musicVideoType": mvt}}}}
+            }})
+        };
+        // con el videoclip de principal, igual se queda la canción
+        let v = json!({"contents": [{"playlistPanelVideoWrapperRenderer": {
+            "primaryRenderer": panel("video1", false),
+            "counterpart": [{"counterpartRenderer": panel("song1", true)}]
+        }}]});
+        let items = parse_items(&v);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].video_id.as_deref(), Some("song1"));
+        assert_eq!(items[0].album, "$AD BOYZ");
+    }
+
+    #[test]
+    fn same_song_versions() {
+        let it = |t: &str, a: &str| Item { title: t.into(), artist: a.into(), ..Item::from_json(&json!({"kind": "song", "title": "", "video_id": "x"})).unwrap() };
+        assert!(it("Daño al corazón", "EfectoSR").same_song(&it("Daño al corazón", "Efecto SR")));
+        assert!(it("Amor Tumbado", "Natanael Cano").same_song(&it("Amor Tumbado", "Alejandro Fernández, Natanael Cano")));
+        assert!(it("Nuestras Metas", "Ivan Orozco").same_song(&it("Nuestras metas", "Ivan Orozco")));
+        assert!(it("CHULA", "Eslabon Armado").same_song(&it("CHULA", "Eslabon")));
+        assert!(!it("Por Ti", "Alfredo Manzo").same_song(&it("Por Ti", "Otro Artista")));
+        assert!(!it("Me Matas", "Eslabon Armado").same_song(&it("Antisocial", "Eslabon Armado")));
+    }
+
+    #[test]
     fn item_roundtrip() {
         let it = Item {
             kind: Kind::Video,
@@ -721,3 +786,4 @@ mod tests {
         assert!(client_version().starts_with("1.20"));
     }
 }
+
