@@ -12,6 +12,7 @@ mod lrclib;
 mod mouse;
 mod mpris;
 mod mpv;
+mod notif;
 mod settings;
 mod spotify;
 mod stream;
@@ -174,6 +175,7 @@ struct App {
     lyrics_auto: Cell<u16>,       // dónde la dejó el último dibujo siguiendo a la canción
     lyrics_total: Cell<u16>,      // filas de la letra con tiempos (ya partidas al ancho)
     sleep: Sleep,
+    desktop: Option<Sender<notif::Song>>, // avisos del escritorio
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -279,6 +281,7 @@ impl App {
             lyrics_auto: Cell::new(0),
             lyrics_total: Cell::new(0),
             sleep: Sleep::Off,
+            desktop: None,
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -664,6 +667,7 @@ impl App {
         self.song_start = Instant::now();
         self.track_n += 1;
         self.splash = Some(Instant::now());
+        self.announce(i);
         self.added = 0;
         self.loaded = true;
         self.pos = None;
@@ -872,16 +876,7 @@ impl App {
             let Ok(img) = api.get_bytes(&url).and_then(|b| image::load_from_memory(&b).map_err(|e| e.to_string())) else {
                 return;
             };
-            // hqdefault es 4:3 con franjas negras alrededor del 16:9
-            let img = if img.width() * 3 == img.height() * 4 {
-                let h = img.width() * 9 / 16;
-                img.crop_imm(0, (img.height() - h) / 2, img.width(), h)
-            } else {
-                img
-            };
-            // las miniaturas de video son 16:9; YouTube Music recorta el centro
-            let side = img.width().min(img.height());
-            let img = img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side);
+            let img = api::square(img);
             let _ = tx.send(Ev::Cover { vid, img });
         });
     }
@@ -1471,6 +1466,26 @@ impl App {
             self.shuffle_vec(&mut rest);
             self.queue.extend(rest);
             self.added = 0;
+        }
+    }
+
+    /// El aviso del escritorio de la canción que empieza (si se quiere).
+    fn announce(&mut self, i: usize) {
+        if self.cfg.desktop == config::Desktop::Off {
+            return;
+        }
+        let Some(it) = self.queue.get(i) else { return };
+        if self.desktop.is_none() {
+            self.desktop = notif::start(self.api.clone());
+        }
+        let song = notif::Song {
+            title: it.title.clone(),
+            artist: [it.artist.as_str(), it.album.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
+            cover: it.cover_url(),
+            away_only: self.cfg.desktop == config::Desktop::Away,
+        };
+        if let Some(tx) = &self.desktop {
+            let _ = tx.send(song);
         }
     }
 

@@ -120,6 +120,7 @@ pub struct Strings {
     pub bg_terminal: &'static str,
     pub bg_theme: &'static str,
     pub labels: [&'static str; 3],
+    pub desktops: [&'static str; 3],
     /// la barra de abajo con «palabras enteras»: aleatorio, repetir, repetir una, autoplay, volumen
     pub words: [&'static str; 5],
     pub borders: [&'static str; 7],
@@ -171,6 +172,7 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub set_desktop: &'static str,
     pub no_link: &'static str,
     pub copied: &'static str,
     pub sleep_end: &'static str,
@@ -245,6 +247,7 @@ pub static ES: Strings = Strings {
     bg_terminal: "el de la terminal",
     bg_theme: "el del tema",
     labels: ["iconos", "palabras cortas", "palabras enteras"],
+    desktops: ["no", "si no estás mirando rola", "siempre"],
     words: ["aleatorio", "repetir", "repetir una", "autoplay", "volumen"],
     borders: ["como Hyprland", "redondeados", "rectos", "dobles", "gruesos", "punteados", "sin bordes"],
     cases: ["normal", "MAYÚSCULAS", "minúsculas"],
@@ -361,6 +364,7 @@ pub static ES: Strings = Strings {
     sleep_end: "fin",
     copied: "enlace de «{}» copiado",
     no_link: "esto no tiene enlace",
+    set_desktop: "Avisos del escritorio con cada canción",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -429,6 +433,7 @@ pub static EN: Strings = Strings {
     bg_terminal: "terminal's",
     bg_theme: "theme's",
     labels: ["icons", "short words", "full words"],
+    desktops: ["off", "when you're not looking at rola", "always"],
     words: ["shuffle", "repeat", "repeat one", "autoplay", "volume"],
     borders: ["like Hyprland", "rounded", "plain", "double", "thick", "dashed", "none"],
     cases: ["normal", "UPPERCASE", "lowercase"],
@@ -545,5 +550,6 @@ pub static EN: Strings = Strings {
     sleep_end: "end",
     copied: "copied the link to “{}”",
     no_link: "this has no link",
+    set_desktop: "Desktop notification for each song",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };

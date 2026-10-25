@@ -73,6 +73,8 @@ choice!(Bar { Line => "line", Knob => "knob", Blocks => "blocks", Dots => "dots"
 choice!(Quality { Best => "best", Medium => "medium", Low => "low" });
 // cómo se rotulan los botones: iconos de Nerd Font, palabras cortas o enteras
 choice!(Labels { Icons => "icons", Short => "short", Words => "words" });
+// aviso del escritorio con cada canción: nunca, si no estás mirando rola, siempre
+choice!(Desktop { Off => "off", Away => "away", Always => "always" });
 // mayúsculas/minúsculas en los rótulos de la interfaz (no en títulos de canciones)
 choice!(Case { Normal => "normal", Upper => "upper", Lower => "lower" });
 // cómo se marca la fila elegida
@@ -150,6 +152,7 @@ pub struct Config {
     pub side_width: u16,
     pub lyrics_width: u16, // % del panel principal
     pub footer: bool,
+    pub desktop: Desktop,
     pub motion: bool, // ecualizador, títulos que se desplazan, aviso de canción nueva
     pub quality: Quality,
     pub vol_step: i64,
@@ -192,6 +195,7 @@ impl Default for Config {
             side_width: 28,
             lyrics_width: 40,
             footer: true,
+            desktop: Desktop::Off,
             motion: true,
             quality: Quality::Best,
             vol_step: 5,
@@ -249,6 +253,7 @@ impl Config {
             side_width: num("side_width", d.side_width as u64, 16, 80) as u16,
             lyrics_width: num("lyrics_width", d.lyrics_width as u64, 20, 80) as u16,
             footer: v["footer"].as_bool().unwrap_or(d.footer),
+            desktop: v["desktop"].as_str().and_then(Desktop::parse).unwrap_or(d.desktop),
             motion: v["motion"].as_bool().unwrap_or(d.motion),
             quality: pick(&v["quality"], d.quality),
             vol_step: num("vol_step", d.vol_step as u64, 1, 25) as i64,
@@ -280,6 +285,7 @@ impl Config {
             "side_width": self.side_width,
             "lyrics_width": self.lyrics_width,
             "footer": self.footer,
+            "desktop": self.desktop.key(),
             "motion": self.motion,
             "quality": self.quality.key(),
             "vol_step": self.vol_step,

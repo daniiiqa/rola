@@ -14,6 +14,7 @@ pub enum Setting {
     Restore,
     Mouse,
     Notify,
+    Desktop,
     Theme,
     Background,
     Borders,
@@ -38,7 +39,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify]),
+    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify, Setting::Desktop]),
     (
         |s| s.sec_look,
         &[
@@ -73,6 +74,7 @@ impl Setting {
             Setting::Restore => s.set_restore,
             Setting::Mouse => s.set_mouse,
             Setting::Notify => s.set_notify,
+            Setting::Desktop => s.set_desktop,
             Setting::Theme => s.set_theme,
             Setting::Background => s.set_background,
             Setting::Borders => s.set_borders,
@@ -100,6 +102,7 @@ impl Setting {
             Setting::Restore => "restore",
             Setting::Mouse => "mouse",
             Setting::Notify => "notify_secs",
+            Setting::Desktop => "desktop",
             Setting::Theme => "theme",
             Setting::Background => "transparent",
             Setting::Borders => "borders",
@@ -135,6 +138,7 @@ impl App {
             Setting::Restore => yn(c.restore),
             Setting::Mouse => yn(c.mouse),
             Setting::Notify => format!("{} s", c.notify_secs),
+            Setting::Desktop => s.desktops[idx(c.desktop)].into(),
             Setting::Theme => c.theme.clone(),
             Setting::Background => if c.transparent { s.bg_terminal } else { s.bg_theme }.into(),
             Setting::Borders if c.borders == config::Borders::Auto => {
@@ -180,6 +184,7 @@ impl App {
                 crate::mouse_capture(c.mouse);
             }
             Setting::Notify => c.notify_secs = step_in(config::NOTIFY_SECS, c.notify_secs, d),
+            Setting::Desktop => c.desktop = c.desktop.step(d),
             Setting::Theme => {
                 let names = theme::names();
                 let i = names.iter().position(|n| *n == c.theme).unwrap_or(0) as isize;

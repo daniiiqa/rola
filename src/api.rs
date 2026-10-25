@@ -150,6 +150,19 @@ impl Auth {
     }
 }
 
+/// La portada cuadrada, como en YouTube Music: sin las franjas negras de
+/// hqdefault (4:3 alrededor de un 16:9) y recortando el centro.
+pub fn square(img: image::DynamicImage) -> image::DynamicImage {
+    let img = if img.width() * 3 == img.height() * 4 {
+        let h = img.width() * 9 / 16;
+        img.crop_imm(0, (img.height() - h) / 2, img.width(), h)
+    } else {
+        img
+    };
+    let side = img.width().min(img.height());
+    img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side)
+}
+
 #[derive(Clone)]
 pub struct Api {
     agent: ureq::Agent,

@@ -28,6 +28,31 @@ pub fn rounding() -> Option<i64> {
     serde_json::from_str::<Value>(&out).ok()?["int"].as_i64()
 }
 
+/// ¿La ventana con el foco es la terminal de rola? (su proceso es uno de
+/// nuestros antepasados). Fuera de Hyprland no se sabe: no.
+pub fn looking_at_me() -> bool {
+    let active = (|| {
+        let mut s = UnixStream::connect(socket(".socket.sock")?).ok()?;
+        s.set_read_timeout(Some(Duration::from_millis(300))).ok()?;
+        s.write_all(b"j/activewindow").ok()?;
+        let mut out = String::new();
+        s.read_to_string(&mut out).ok()?;
+        serde_json::from_str::<Value>(&out).ok()?["pid"].as_u64()
+    })();
+    let Some(active) = active else { return false };
+    let mut pid = std::process::id() as u64;
+    while pid > 1 {
+        if pid == active {
+            return true;
+        }
+        // el padre: cuarto campo de /proc/<pid>/stat (tras el nombre entre paréntesis)
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { break };
+        let Some(ppid) = stat.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().nth(1)?.parse().ok()) else { break };
+        pid = ppid;
+    }
+    false
+}
+
 /// Avisa cada vez que Hyprland recarga su config: es lo último que hace
 /// LookSwitch.sh, así que para entonces el look nuevo ya está entero.
 pub fn listen(tx: Sender<Ev>) {

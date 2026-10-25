@@ -118,6 +118,13 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Avisos del escritorio
+
+`o` → «Avisos del escritorio con cada canción»: un aviso con portada, título y
+artista cada vez que cambia la canción (mako, swaync, dunst…). Cada uno
+sustituye al anterior. Con «si no estás mirando rola», en Hyprland no avisa
+mientras la ventana de rola tenga el foco.
+
 ## Ratón
 
 Clic en la barra lateral abre; en una canción la elige, doble clic la pone y
