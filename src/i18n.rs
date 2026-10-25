@@ -172,6 +172,7 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub set_cover_colors: &'static str,
     pub set_crossfade: &'static str,
     pub set_desktop: &'static str,
     pub no_link: &'static str,
@@ -367,6 +368,7 @@ pub static ES: Strings = Strings {
     no_link: "esto no tiene enlace",
     set_desktop: "Avisos del escritorio con cada canción",
     set_crossfade: "Fundido entre canciones",
+    set_cover_colors: "Colores de la portada (cambian con cada canción)",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -554,5 +556,6 @@ pub static EN: Strings = Strings {
     no_link: "this has no link",
     set_desktop: "Desktop notification for each song",
     set_crossfade: "Crossfade between songs",
+    set_cover_colors: "Colors from the album cover (change with each song)",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };

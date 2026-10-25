@@ -13,6 +13,7 @@ mod mouse;
 mod mpris;
 mod mpv;
 mod notif;
+mod palette;
 mod settings;
 mod spotify;
 mod stream;
@@ -26,6 +27,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::style::Color;
 use ratatui::widgets::{ListState, TableState};
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
@@ -46,7 +48,7 @@ pub enum Ev {
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
     Lyrics { vid: String, lyrics: Lyrics },
-    Cover { vid: String, img: image::DynamicImage },
+    Cover { vid: String, img: image::DynamicImage, pal: Option<(palette::Hsl, palette::Hsl)> },
     Notify(String, bool),
     Stream { vid: String, format: &'static str, link: Option<stream::Link> },
     Ready(String), // ya pasó el rato tras el que su enlace deja de dar 403
@@ -144,7 +146,11 @@ struct App {
     tx: Sender<Ev>,
     mpv: mpv::Mpv,
     cfg: Config,
-    theme: theme::Theme,
+    theme: theme::Theme,      // el que se pinta: el del look, teñido por la portada si toca
+    theme_base: theme::Theme, // el del look
+    cover_pal: Option<(palette::Hsl, palette::Hsl)>,
+    tint_from: (Color, Color), // de dónde viene el cambio de color (principal, acento)
+    tint_at: Instant,
     theme_mtime: Option<SystemTime>,
     cfg_mtimes: [Option<SystemTime>; 2],
     rounded: bool, // Hyprland redondea las ventanas (para los bordes «como Hyprland»)
@@ -215,6 +221,8 @@ struct App {
 
 /// Lo que dura el aviso de canción nueva.
 pub const SPLASH: Duration = Duration::from_millis(3500);
+/// Lo que tarda en pasar de los colores de una portada a los de otra.
+const TINT: Duration = Duration::from_millis(900);
 /// Tras mover la letra a mano, lo que tarda en volver a seguir a la canción.
 pub const LYRICS_HAND: Duration = Duration::from_secs(4);
 
@@ -254,6 +262,10 @@ impl App {
             tx: tx.clone(),
             mpv,
             theme: theme::load(&cfg),
+            theme_base: theme::load(&cfg),
+            cover_pal: None,
+            tint_from: (Color::Reset, Color::Reset),
+            tint_at: Instant::now(),
             theme_mtime: theme::mtime(theme::source(&cfg).as_deref()),
             cfg_mtimes: config::mtimes(),
             rounded: hypr::rounding().is_none_or(|r| r > 0),
@@ -887,7 +899,8 @@ impl App {
     fn fetch_cover(&mut self) {
         let Some(it) = self.current() else { return };
         let (Some(vid), Some(url)) = (it.video_id.clone(), it.cover_url()) else { return };
-        if !self.cover_on || self.cover.as_ref().is_some_and(|(v, _)| *v == vid) {
+        // también sin verla, si sus colores tiñen la interfaz
+        if !(self.cover_on || self.cfg.cover_colors) || self.cover.as_ref().is_some_and(|(v, _)| *v == vid) {
             return;
         }
         self.cover = Some((vid.clone(), None));
@@ -897,14 +910,45 @@ impl App {
                 return;
             };
             let img = api::square(img);
-            let _ = tx.send(Ev::Cover { vid, img });
+            let pal = palette::of(&img);
+            let _ = tx.send(Ev::Cover { vid, img, pal });
         });
     }
 
     /// Lo que se ve en la cola, o lo que está sonando si no se mira la cola.
     /// Hay algo moviéndose en pantalla: redibujar más a menudo.
     fn animating(&self) -> bool {
-        self.cfg.motion && ((self.loaded && !self.paused) || self.splash.is_some_and(|s| s.elapsed() < SPLASH))
+        self.cfg.motion
+            && ((self.loaded && !self.paused) || self.splash.is_some_and(|s| s.elapsed() < SPLASH) || self.tint_at.elapsed() < TINT)
+    }
+
+    // ── colores de la portada ──
+    /// Empieza el paso a los colores de esta portada (o de vuelta a los del look).
+    fn set_tint(&mut self, pal: Option<(palette::Hsl, palette::Hsl)>) {
+        self.tint_from = (self.theme.primary, self.theme.accent);
+        self.tint_at = Instant::now();
+        self.cover_pal = pal;
+    }
+
+    /// El tema que toca pintar: el del look con el principal y el acento de la
+    /// portada (si se quiere y el look va a color), pasando suave de unos a otros.
+    pub fn apply_tint(&mut self) {
+        let base = self.theme_base;
+        let dark = palette::dark(base.fg);
+        let target = match (self.cover_pal, self.cfg.cover_colors, self.cfg.tint) {
+            (Some((a, b)), true, config::Tint::Color) => (palette::adapt(a, dark), palette::adapt(b, dark)),
+            // fósforo: todo en un color, el de la portada
+            (Some((a, _)), true, config::Tint::Phosphor) => (palette::adapt(a, dark), palette::adapt(a, dark)),
+            _ => (base.primary, base.accent),
+        };
+        let k = if self.cfg.motion { self.tint_at.elapsed().as_secs_f64() / TINT.as_secs_f64() } else { 1.0 };
+        let k = k.clamp(0.0, 1.0);
+        let k = k * k * (3.0 - 2.0 * k);
+        let blend = |a: Color, b: Color| match (a, b) {
+            (Color::Rgb(..), Color::Rgb(..)) if k < 1.0 => ui::mix(a, b, k),
+            _ => b,
+        };
+        self.theme = theme::Theme { primary: blend(self.tint_from.0, target.0), accent: blend(self.tint_from.1, target.1), ..base };
     }
 
     pub fn queue_view(&self) -> bool {
@@ -1251,11 +1295,14 @@ impl App {
                 }
             },
             Ev::Matched { sp, vid } => self.matched(sp, vid),
-            Ev::Cover { vid, img } => {
+            Ev::Cover { vid, img, pal } => {
                 if let Some((v, c)) = &mut self.cover {
                     if *v == vid {
                         *c = Some(self.picker.new_resize_protocol(img));
                     }
+                }
+                if self.current().and_then(|x| x.video_id.as_ref()) == Some(&vid) {
+                    self.set_tint(pal);
                 }
             }
             Ev::Lyrics { vid, lyrics } => {
@@ -1733,7 +1780,12 @@ impl App {
     }
 
     fn reload_theme(&mut self) {
+        // de los colores de ahora a los nuevos, sin salto (cambio de look incluido)
+        self.tint_from = (self.theme.primary, self.theme.accent);
+        self.tint_at = Instant::now();
         self.theme = theme::load(&self.cfg);
+        self.theme_base = self.theme;
+        self.fetch_cover();
         self.theme_mtime = theme::mtime(theme::source(&self.cfg).as_deref());
     }
 

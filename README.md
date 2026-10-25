@@ -118,6 +118,13 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Colores de la portada
+
+`o` → «Colores de la portada»: el color principal y el de acento salen de la
+portada de la que suena (los dos más vivos, ajustados para que se lean sobre
+el fondo del look) y cambian suavemente con cada canción. Va también en el
+`look.json` de cada look (`"cover_colors": true`).
+
 ## Fundido entre canciones
 
 `o` → «Fundido entre canciones» (3 a 12 s): al final de cada una, la siguiente

@@ -84,7 +84,7 @@ fn wrap(s: &str, w: usize) -> Vec<String> {
 }
 
 /// De `a` a `b` (0..=1); si alguno no es RGB (colores de la terminal), `a`.
-fn mix(a: Color, b: Color, k: f64) -> Color {
+pub fn mix(a: Color, b: Color, k: f64) -> Color {
     match (a, b) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
             let m = |x: u8, y: u8| (x as f64 + (y as f64 - x as f64) * k.clamp(0.0, 1.0)).round() as u8;
@@ -265,6 +265,7 @@ impl App {
 
     pub fn draw(&mut self, f: &mut Frame) {
         *self.hits.borrow_mut() = Hits::default();
+        self.apply_tint();
         if self.theme.bg != Color::Reset {
             f.render_widget(Block::new().style(Style::new().bg(self.theme.bg).fg(self.theme.fg)), f.area());
         }
