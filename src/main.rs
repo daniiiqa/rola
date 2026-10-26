@@ -103,6 +103,8 @@ pub enum Sleep {
 
 /// Lo que tarda en bajar el volumen antes de pararse.
 const SLEEP_FADE: f64 = 12.0;
+/// Cuántas búsquedas se recuerdan (↑ en la búsqueda).
+const SEARCHES: usize = 20;
 /// Con cuánto adelanto se abre el mpv del fundido, para que ya haya cargado.
 const XFADE_PREP: f64 = 4.0;
 
@@ -228,6 +230,8 @@ struct App {
     hover: Option<String>, // canción bajo el cursor en el último tick
     focus: Focus,
     input: String,
+    searches: Vec<String>,        // las últimas búsquedas, la más reciente primero
+    search_at: Option<usize>,     // ↑/↓ en la búsqueda: cuál de ellas se ve
     side: Vec<(String, Side)>,
     side_state: ListState,
     views: Vec<View>,
@@ -361,6 +365,8 @@ impl App {
             cfg,
             focus: Focus::Main,
             input: String::new(),
+            searches: st["searches"].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(String::from)).collect(),
+            search_at: None,
             side: Vec::new(),
             side_state: ListState::default().with_selected(Some(0)),
             views: Vec::new(),
@@ -594,6 +600,7 @@ impl App {
             "lyrics": self.lyrics_on,
             "cover": self.cover_on,
             "login_skipped": self.login_skipped,
+            "searches": self.searches,
             "queue": self.queue.iter().map(Item::to_json).collect::<Vec<_>>(),
             "qi": self.qi,
             "pos": if self.loaded { self.pos } else { self.resume.as_ref().map(|r| r.1) },
@@ -1725,9 +1732,24 @@ impl App {
                 KeyCode::Enter => {
                     let q = self.input.trim().to_string();
                     if !q.is_empty() {
+                        // arriba del historial, sin repetirse
+                        self.searches.retain(|s| !s.eq_ignore_ascii_case(&q));
+                        self.searches.insert(0, q.clone());
+                        self.searches.truncate(SEARCHES);
+                        self.search_at = None;
                         self.open(&format!("«{q}»"), Load::Search(q), true);
                         self.focus = Focus::Main;
                     }
+                }
+                // las de antes: ↑ más vieja, ↓ más nueva (y al final, vacío)
+                KeyCode::Up if !self.searches.is_empty() => {
+                    let i = self.search_at.map_or(0, |i| (i + 1).min(self.searches.len() - 1));
+                    self.search_at = Some(i);
+                    self.input = self.searches[i].clone();
+                }
+                KeyCode::Down => {
+                    self.search_at = self.search_at.and_then(|i| i.checked_sub(1));
+                    self.input = self.search_at.map(|i| self.searches[i].clone()).unwrap_or_default();
                 }
                 KeyCode::Esc | KeyCode::Tab => self.focus = Focus::Main,
                 KeyCode::Backspace => drop(self.input.pop()),

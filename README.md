@@ -243,7 +243,7 @@ Para seleccionar texto, Mayús + arrastrar; o se apaga en ajustes → Ratón.
 
 ## Teclas
 
-`/` buscar · `f` filtrar la lista (sin acentos ni mayúsculas; `Esc` lo quita) · `Enter` reproducir/abrir · `espacio` pausa · `n`/`p` sig./ant. ·
+`/` buscar (`↑`/`↓`: las de antes) · `f` filtrar la lista (sin acentos ni mayúsculas; `Esc` lo quita) · `Enter` reproducir/abrir · `espacio` pausa · `n`/`p` sig./ant. ·
 `<`/`>` ±5s · `+`/`-` volumen · `s` aleatorio · `r` repetir · `a` autoplay
 (radio al acabar la cola) · `z` a la cola · `R` radio · `L` me gusta · `t` temporizador (al acabar esta / 15…90 min, bajando el volumen) · `Y` copiar el enlace ·
 `P` añadir a una playlist (o a una nueva, con esa canción o con toda la cola) · `D` no me gusta (y salta, si es la que suena) · `y` letra · `c` portada · `o` ajustes · `?` ayuda ·
