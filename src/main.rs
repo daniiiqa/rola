@@ -20,6 +20,7 @@ mod scrobble;
 mod notif;
 mod palette;
 mod party;
+mod session;
 mod settings;
 mod spotify;
 mod stats;
@@ -2778,6 +2779,12 @@ fn unix_now() -> i64 {
 /// Cerrar la ventana de la terminal (SIGHUP) o un kill (SIGTERM, SIGINT):
 /// que rola salga como con q, guardando sesión y emparejamientos.
 static QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Otra ventana se enganchó a la sesión: hay que prepararle la pantalla.
+static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_reattach(_: libc::c_int) {
+    REDRAW.store(true, std::sync::atomic::Ordering::Relaxed);
+}
 
 extern "C" fn on_signal(_: libc::c_int) {
     QUIT.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2787,6 +2794,7 @@ fn catch_signals() {
     for sig in [libc::SIGHUP, libc::SIGTERM, libc::SIGINT] {
         unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
     }
+    unsafe { libc::signal(session::REATTACH, on_reattach as *const () as libc::sighandler_t) };
 }
 
 /// "3:45" / "1:02:03" → segundos.
@@ -2813,6 +2821,17 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         }
         if app.quit || QUIT.load(std::sync::atomic::Ordering::Relaxed) {
             break Ok(());
+        }
+        // ventana nueva en la sesión: llega en blanco, sin pantalla alternativa,
+        // ratón ni la portada (que vive en la terminal): todo otra vez
+        if REDRAW.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            use ratatui::crossterm::{cursor, execute, terminal};
+            let _ = execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::Hide);
+            mouse_capture(app.cfg.mouse);
+            let _ = term.clear();
+            app.cover = None;
+            app.fetch_cover();
+            urgent = true;
         }
         app.mpris_sync();
         app.discord_sync();
@@ -2942,6 +2961,15 @@ fn main() {
         let (list, cmd) = (missing.join(", "), missing.join(" "));
         eprintln!("{}", msg.replacen("{}", &list, 1).replace("{}", &cmd));
         std::process::exit(1);
+    }
+    if args.iter().any(|a| a == "--serve") {
+        return session::serve();
+    }
+    // la ventana de una sesión de fondo (que sigue sonando al cerrarla); si no
+    // se puede, como siempre
+    let inner = args.iter().any(|a| a == "--inner");
+    if !inner && Config::load().background && session::wanted() && session::attach().is_ok() {
+        return;
     }
     let (tx, rx) = mpsc::channel();
     let term = ratatui::init();

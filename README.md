@@ -89,6 +89,15 @@ Hyprland recarga su config). Lo que cambies en los ajustes sobre una de esas
 claves se guarda en `look.json` (marcado «del look» en el menú), así vuelve
 con ese look.
 
+## Sigue sonando con la ventana cerrada
+
+Cerrar la ventana no para la música: rola corre en una sesión de fondo (como
+tmux o dtach) y la ventana solo la enseña. Mientras, se maneja con las teclas
+multimedia, playerctl, waybar o los auriculares (MPRIS), y Discord y
+ListenBrainz siguen. Abrir `rola` otra vez la retoma tal cual; si ya está
+abierta en otra ventana, esa la suelta. `q` sí cierra rola del todo (y para la
+música). Se apaga en `o` → General → «Seguir sonando al cerrar la ventana».
+
 ## Arranque rápido de canciones
 
 El audio bueno (opus ~130k) llega con un enlace que YouTube no deja usar hasta

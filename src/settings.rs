@@ -14,6 +14,7 @@ pub enum Setting {
     Discord,
     Lang,
     Restore,
+    KeepPlaying,
     Mouse,
     Notify,
     Desktop,
@@ -46,7 +47,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::Discord, Setting::Lang, Setting::Restore, Setting::Mouse, Setting::Notify, Setting::Desktop]),
+    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::Discord, Setting::Lang, Setting::Restore, Setting::KeepPlaying, Setting::Mouse, Setting::Notify, Setting::Desktop]),
     (
         |s| s.sec_look,
         &[
@@ -83,6 +84,7 @@ impl Setting {
             Setting::Discord => s.set_discord,
             Setting::Lang => s.set_lang,
             Setting::Restore => s.set_restore,
+            Setting::KeepPlaying => s.set_background_play,
             Setting::Mouse => s.set_mouse,
             Setting::Notify => s.set_notify,
             Setting::Desktop => s.set_desktop,
@@ -116,6 +118,7 @@ impl Setting {
         Some(match self {
             Setting::Lang => "lang",
             Setting::Restore => "restore",
+            Setting::KeepPlaying => "background",
             Setting::Mouse => "mouse",
             Setting::Notify => "notify_secs",
             Setting::Desktop => "desktop",
@@ -168,6 +171,7 @@ impl App {
             Setting::Discord => linked(s, (!c.discord.is_empty()).then(String::new)),
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
+            Setting::KeepPlaying => yn(c.background),
             Setting::Mouse => yn(c.mouse),
             Setting::Notify => format!("{} s", c.notify_secs),
             Setting::Desktop => s.desktops[idx(c.desktop)].into(),
@@ -226,6 +230,7 @@ impl App {
                 self.retitle(old);
             }
             Setting::Restore => c.restore = !c.restore,
+            Setting::KeepPlaying => c.background = !c.background,
             Setting::Mouse => {
                 c.mouse = !c.mouse;
                 crate::mouse_capture(c.mouse);

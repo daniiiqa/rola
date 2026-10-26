@@ -104,6 +104,7 @@ pub struct Strings {
     pub sec_playback: &'static str,
     pub set_lang: &'static str,
     pub set_restore: &'static str,
+    pub set_background_play: &'static str,
     pub set_mouse: &'static str,
     pub set_notify: &'static str,
     pub set_theme: &'static str,
@@ -289,6 +290,7 @@ pub static ES: Strings = Strings {
     sec_playback: "Reproducción",
     set_lang: "Idioma",
     set_restore: "Recuperar la sesión al abrir",
+    set_background_play: "Seguir sonando al cerrar la ventana (q sale del todo)",
     set_mouse: "Ratón (Mayús + arrastrar para seleccionar texto)",
     set_notify: "Duración de los avisos",
     set_theme: "Tema",
@@ -389,7 +391,7 @@ pub static ES: Strings = Strings {
         ("?", "ayuda"),
         ("q", "salir"),
     ],
-    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --version  la versión instalada\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
+    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app (o la que sigue sonando de fondo)\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --version  la versión instalada\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
     login_intro: "Conectar tu cuenta de YouTube Music:
 
   1. Abre https://music.youtube.com con tu sesión iniciada.
@@ -551,6 +553,7 @@ pub static EN: Strings = Strings {
     sec_playback: "Playback",
     set_lang: "Language",
     set_restore: "Restore session on start",
+    set_background_play: "Keep playing when the window closes (q quits for real)",
     set_mouse: "Mouse (Shift + drag to select text)",
     set_notify: "Notification duration",
     set_theme: "Theme",
@@ -651,7 +654,7 @@ pub static EN: Strings = Strings {
         ("?", "help"),
         ("q", "quit"),
     ],
-    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app\n  rola --login    connect your account (from your browser)\n  rola --version  the installed version\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
+    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app (or the one still playing in the background)\n  rola --login    connect your account (from your browser)\n  rola --version  the installed version\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
     login_intro: "Connect your YouTube Music account:
 
   1. Open https://music.youtube.com while signed in.
