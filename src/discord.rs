@@ -87,6 +87,8 @@ pub fn activity(p: &Presence, nonce: u64) -> Value {
     };
     let mut a = json!({
         "type": 2, // «Escuchando»
+        // en la lista de miembros, la canción («♫ Me Matas») en vez del nombre de la app
+        "status_display_type": 2,
         "details": fit(&s.title),
         "state": fit(&s.artist),
         "timestamps": { "start": s.start_ms },
@@ -185,6 +187,7 @@ mod tests {
         let v = activity(&Some(s), 7);
         let a = &v["args"]["activity"];
         assert_eq!(a["type"], 2);
+        assert_eq!(a["status_display_type"], 2);
         assert_eq!(a["details"], "x  "); // mínimo 2 caracteres
         assert_eq!(a["timestamps"]["end"], 181_000);
         assert!(a["assets"].get("large_text").is_none());
