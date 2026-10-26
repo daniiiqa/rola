@@ -75,6 +75,9 @@ pub struct Strings {
     pub col_album: &'static str,
     pub keys_title: &'static str,
     pub keys_bad: &'static str,
+    pub remote_not_running: &'static str,
+    pub remote_not_found: &'static str,
+    pub remote_playing: &'static str,
     pub keys_own: &'static str,
     pub add_to: &'static str,
     pub new_playlist: &'static str,
@@ -263,6 +266,9 @@ pub static ES: Strings = Strings {
     col_album: "álbum",
     keys_title: "teclas",
     keys_bad: "keys.json: no entiendo {}",
+    remote_not_running: "rola no está abierto",
+    remote_not_found: "no encontré «{}»",
+    remote_playing: "▶ {} · {}",
     keys_own: "tuyas (~/.config/rola/keys.json)",
     add_to: "añadir «{}» a…",
     new_playlist: "+ nueva playlist…",
@@ -391,7 +397,7 @@ pub static ES: Strings = Strings {
         ("?", "ayuda"),
         ("q", "salir"),
     ],
-    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app (o la que sigue sonando de fondo)\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --version  la versión instalada\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
+    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app (o la que sigue sonando de fondo)\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --version  la versión instalada\n  rola play «…»   busca y pone esa (y su radio) en el rola abierto\n  rola next | prev | pause\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
     login_intro: "Conectar tu cuenta de YouTube Music:
 
   1. Abre https://music.youtube.com con tu sesión iniciada.
@@ -526,6 +532,9 @@ pub static EN: Strings = Strings {
     col_album: "album",
     keys_title: "keys",
     keys_bad: "keys.json: didn't understand {}",
+    remote_not_running: "rola isn't running",
+    remote_not_found: "couldn't find “{}”",
+    remote_playing: "▶ {} · {}",
     keys_own: "yours (~/.config/rola/keys.json)",
     add_to: "add “{}” to…",
     new_playlist: "+ new playlist…",
@@ -654,7 +663,7 @@ pub static EN: Strings = Strings {
         ("?", "help"),
         ("q", "quit"),
     ],
-    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app (or the one still playing in the background)\n  rola --login    connect your account (from your browser)\n  rola --version  the installed version\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
+    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app (or the one still playing in the background)\n  rola --login    connect your account (from your browser)\n  rola --version  the installed version\n  rola play “…”   search and play it (with its radio) in the running rola\n  rola next | prev | pause\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
     login_intro: "Connect your YouTube Music account:
 
   1. Open https://music.youtube.com while signed in.

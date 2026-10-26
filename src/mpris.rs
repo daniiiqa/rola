@@ -27,6 +27,7 @@ pub enum Media {
     Volume(f64), // 0..1
     Shuffle(bool),
     Loop(String),
+    Open(String), // video_id (OpenUri: `rola play …`, `playerctl open …`)
     Quit,
 }
 
@@ -110,7 +111,7 @@ impl Root {
     }
     #[zbus(property)]
     fn supported_uri_schemes(&self) -> Vec<String> {
-        Vec::new()
+        vec!["https".into()]
     }
     #[zbus(property)]
     fn supported_mime_types(&self) -> Vec<String> {
@@ -158,7 +159,11 @@ impl Player {
     fn set_position(&self, _track_id: ObjectPath<'_>, position: i64) {
         self.send(Media::SetPos(position))
     }
-    fn open_uri(&self, _uri: String) {}
+    fn open_uri(&self, uri: String) {
+        if let Some(id) = crate::remote::video_id(&uri) {
+            self.send(Media::Open(id))
+        }
+    }
 
     #[zbus(property)]
     fn playback_status(&self) -> String {

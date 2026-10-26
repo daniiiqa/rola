@@ -16,6 +16,7 @@ mod lrclib;
 mod mouse;
 mod mpris;
 mod mpv;
+mod remote;
 mod scrobble;
 mod notif;
 mod palette;
@@ -55,6 +56,7 @@ pub enum Ev {
     Loaded { seq: u64, title: String, reset: bool, radio: bool, playlist: Option<String>, res: Result<Vec<Item>, String> },
     Created(Result<(String, usize), String>), // playlist nueva: nombre y canciones
     Accounts(Choosing),                       // varias cuentas en el navegador: a elegir
+    Opened { vid: String, res: Result<Vec<Item>, String> }, // `rola play …`: la canción y su radio
     Removed { playlist: String, video_id: String, title: String, res: Result<(), String> },
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
@@ -1631,6 +1633,24 @@ impl App {
                     self.play_index(start);
                 }
             }
+            Ev::Opened { vid, res } => {
+                let mut items = match res {
+                    Ok(items) if !items.is_empty() => items,
+                    Ok(_) => return,
+                    Err(e) => return self.notify(format!("radio: {e}"), true),
+                };
+                // la pedida, delante
+                if let Some(i) = items.iter().position(|x| x.video_id.as_deref() == Some(vid.as_str())) {
+                    let it = items.remove(i);
+                    items.insert(0, it);
+                }
+                let title = items[0].title.clone();
+                self.radio_pending = None;
+                self.queue = items;
+                self.added = 0;
+                self.play_index(0);
+                self.notify(fill(self.s().radio_of, &[&title]), false);
+            }
             Ev::Notify(m, err) => self.notify(m, err),
             Ev::Stream { vid, format, link } => {
                 self.fetching.remove(&vid);
@@ -2430,6 +2450,14 @@ impl App {
                     _ => Repeat::Off,
                 }
             }
+            // la de `rola play …`: su radio, que trae primero la canción misma
+            M::Open(vid) => {
+                let (api, tx) = (self.api.clone(), self.tx.clone());
+                std::thread::spawn(move || {
+                    let res = api.radio(&vid);
+                    let _ = tx.send(Ev::Opened { vid, res });
+                });
+            }
             M::Quit => self.quit = true,
         }
     }
@@ -2943,6 +2971,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--login") {
         return login();
+    }
+    if let Some(code) = remote::run(&args, Config::load().lang.s(), &data_dir().join("auth.json")) {
+        std::process::exit(code);
     }
     if args.iter().any(|a| a == "--waybar") {
         return bar::waybar(&args);

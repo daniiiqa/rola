@@ -98,6 +98,19 @@ ListenBrainz siguen. Abrir `rola` otra vez la retoma tal cual; si ya está
 abierta en otra ventana, esa la suelta. `q` sí cierra rola del todo (y para la
 música). Se apaga en `o` → General → «Seguir sonando al cerrar la ventana».
 
+## Desde la línea de órdenes
+
+`rola next`, `rola prev`, `rola pause` y `rola play «búsqueda»` manejan el
+rola abierto (o el que suena de fondo) y terminan: no se queda nada corriendo.
+`play` busca y pone la mejor canción con su radio detrás. También vale
+`playerctl -p rola open https://music.youtube.com/watch?v=…`. En Hyprland, con
+fuzzel para escribir qué poner:
+
+```
+bind = SUPER, M, exec, rola play "$(fuzzel --dmenu --prompt '♪ ' < /dev/null)"
+bind = SUPER, period, exec, rola next
+```
+
 ## Arranque rápido de canciones
 
 El audio bueno (opus ~130k) llega con un enlace que YouTube no deja usar hasta
