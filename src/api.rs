@@ -503,7 +503,7 @@ impl Api {
     pub fn song_info(&self, video_id: &str) -> Result<SongInfo, String> {
         let next = self.post("next", json!({ "videoId": video_id, "isAudioOnly": true }))?;
         let panel = find_key(&next, "playlistPanelVideoRenderer").ok_or("no info")?;
-        let mut info = SongInfo { title: runs_text(&panel["title"]), ..Default::default() };
+        let mut info = SongInfo { title: untitled(runs_text(&panel["title"])), ..Default::default() };
         // «Artista • Álbum • 2024»: el álbum es el que enlaza a uno (los videos
         // traen «56M likes» ahí)
         let byline = &panel["longBylineText"];
