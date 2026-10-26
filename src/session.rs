@@ -26,6 +26,8 @@ const SIZE: u8 = 1;
 
 /// La señal que recibe el de dentro cuando se engancha otra ventana.
 pub const REATTACH: libc::c_int = libc::SIGUSR1;
+/// Y cuando se va la última: que no dibuje para nadie (ni corra cava).
+pub const DETACH: libc::c_int = libc::SIGUSR2;
 
 pub fn socket() -> PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
@@ -216,7 +218,7 @@ pub fn serve() {
     let client: Client = Arc::default();
 
     // lo que entra de una ventana, al de dentro
-    let feed = |mut conn: UnixStream, id: u64, master: Arc<File>, client: Client| {
+    let feed = move |mut conn: UnixStream, id: u64, master: Arc<File>, client: Client| {
         std::thread::spawn(move || {
             while let Some((kind, p)) = read_frame(&mut conn) {
                 match kind {
@@ -231,6 +233,7 @@ pub fn serve() {
             let mut c = client.lock().unwrap_or_else(|e| e.into_inner());
             if c.as_ref().is_some_and(|(n, _)| *n == id) {
                 *c = None;
+                unsafe { libc::kill(pid, DETACH) };
             }
         });
     };
@@ -267,6 +270,7 @@ pub fn serve() {
                 let mut c = client.lock().unwrap_or_else(|e| e.into_inner());
                 if c.as_mut().is_some_and(|(_, s)| s.write_all(&buf[..n]).is_err()) {
                     *c = None;
+                    unsafe { libc::kill(pid, DETACH) };
                 }
             }
         }

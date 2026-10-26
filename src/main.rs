@@ -2974,9 +2974,16 @@ fn unix_now() -> i64 {
 static QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Otra ventana se enganchó a la sesión: hay que prepararle la pantalla.
 static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// En la sesión de fondo y sin ventana: no se dibuja (nadie lo vería).
+static HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn on_reattach(_: libc::c_int) {
+    HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
     REDRAW.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+extern "C" fn on_detach(_: libc::c_int) {
+    HIDDEN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 extern "C" fn on_signal(_: libc::c_int) {
@@ -2988,6 +2995,7 @@ fn catch_signals() {
         unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
     }
     unsafe { libc::signal(session::REATTACH, on_reattach as *const () as libc::sighandler_t) };
+    unsafe { libc::signal(session::DETACH, on_detach as *const () as libc::sighandler_t) };
 }
 
 /// "3:45" / "1:02:03" → segundos.
@@ -3035,7 +3043,8 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         }
         // time-pos llega muchas veces por segundo; la barra no necesita tanto
         let every = if app.animating() { 120 } else { 250 };
-        if urgent || last_draw.elapsed() >= Duration::from_millis(every) {
+        let hidden = HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+        if !hidden && (urgent || last_draw.elapsed() >= Duration::from_millis(every)) {
             if let Err(e) = term.draw(|f| app.draw(f)) {
                 break Err(e);
             }
