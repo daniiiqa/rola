@@ -26,6 +26,7 @@ pub enum Setting {
     Borders,
     Bar,
     Labels,
+    Sources,
     Case,
     Select,
     Tint,
@@ -54,6 +55,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Borders,
             Setting::Bar,
             Setting::Labels,
+            Setting::Sources,
             Setting::Case,
             Setting::Select,
             Setting::Tint,
@@ -89,6 +91,7 @@ impl Setting {
             Setting::Borders => s.set_borders,
             Setting::Bar => s.set_bar,
             Setting::Labels => s.set_labels,
+            Setting::Sources => s.set_sources,
             Setting::Case => s.set_case,
             Setting::Select => s.set_select,
             Setting::Tint => s.set_tint,
@@ -121,6 +124,7 @@ impl Setting {
             Setting::Borders => "borders",
             Setting::Bar => "bar",
             Setting::Labels => "labels",
+            Setting::Sources => "sources",
             Setting::Case => "case",
             Setting::Select => "select",
             Setting::Tint => "tint",
@@ -140,6 +144,15 @@ impl Setting {
     }
 }
 
+/// Lo mismo para todas las cuentas: «conectado · quién» o «sin conectar».
+pub fn linked(s: &Strings, who: Option<String>) -> String {
+    match who {
+        None => s.account_none.into(),
+        Some(w) if w.is_empty() => s.connected.into(),
+        Some(w) => format!("{} · {w}", s.connected),
+    }
+}
+
 fn idx<T: Choice>(x: T) -> usize {
     T::ALL.iter().position(|&y| y == x).unwrap_or(0)
 }
@@ -150,9 +163,9 @@ impl App {
         let yn = |b: bool| if b { s.on } else { s.off }.to_string();
         match k {
             Setting::Account => self.account_name(),
-            Setting::Spotify => self.spotify.as_ref().map(|s| s.user()).unwrap_or_else(|| s.account_none.into()),
-            Setting::Scrobble => self.lb.as_ref().map(|l| l.0.clone()).unwrap_or_else(|| s.account_none.into()),
-            Setting::Discord => yn(!c.discord.is_empty()),
+            Setting::Spotify => linked(s, self.spotify.as_ref().map(|s| s.user())),
+            Setting::Scrobble => linked(s, self.lb.as_ref().map(|l| l.0.clone())),
+            Setting::Discord => linked(s, (!c.discord.is_empty()).then(String::new)),
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
             Setting::Mouse => yn(c.mouse),
@@ -167,6 +180,7 @@ impl App {
             Setting::Borders => s.borders[idx(c.borders)].into(),
             Setting::Bar => s.bars[idx(c.bar)].into(),
             Setting::Labels => s.labels[idx(c.labels)].into(),
+            Setting::Sources => yn(c.sources),
             Setting::Case => s.cases[idx(c.case)].into(),
             Setting::Select => s.selects[idx(c.select)].into(),
             Setting::Tint => s.tints[idx(c.tint)].into(),
@@ -227,6 +241,7 @@ impl App {
             Setting::Borders => c.borders = c.borders.step(d),
             Setting::Bar => c.bar = c.bar.step(d),
             Setting::Labels => c.labels = c.labels.step(d),
+            Setting::Sources => c.sources = !c.sources,
             Setting::Case => c.case = c.case.step(d),
             Setting::Select => c.select = c.select.step(d),
             Setting::Tint => c.tint = c.tint.step(d),

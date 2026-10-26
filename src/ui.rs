@@ -163,7 +163,7 @@ impl App {
 
     /// Los logos solo dicen algo cuando hay dos bibliotecas.
     fn two_sources(&self) -> bool {
-        self.spotify.is_some()
+        self.spotify.is_some() && self.cfg.sources
     }
 
     // ── adornos ──

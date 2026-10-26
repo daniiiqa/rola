@@ -170,6 +170,7 @@ pub struct Config {
     pub side_width: u16,
     pub lyrics_width: u16, // % del panel principal
     pub footer: bool,
+    pub sources: bool, // las etiquetas yt/sp de cada fila (con Spotify conectado)
     pub discord: String, // Application ID para el estado de Discord; vacío: no
     pub cover_colors: bool, // el color principal y el de acento, de la portada
     pub desktop: Desktop,
@@ -220,6 +221,7 @@ impl Default for Config {
             side_width: 28,
             lyrics_width: 40,
             footer: true,
+            sources: true,
             discord: String::new(),
             cover_colors: false,
             desktop: Desktop::Off,
@@ -283,6 +285,7 @@ impl Config {
             side_width: num("side_width", d.side_width as u64, 16, 80) as u16,
             lyrics_width: num("lyrics_width", d.lyrics_width as u64, 20, 80) as u16,
             footer: v["footer"].as_bool().unwrap_or(d.footer),
+            sources: v["sources"].as_bool().unwrap_or(d.sources),
             discord: v["discord"].as_str().unwrap_or("").to_string(),
             cover_colors: v["cover_colors"].as_bool().unwrap_or(d.cover_colors),
             desktop: v["desktop"].as_str().and_then(Desktop::parse).unwrap_or(d.desktop),
@@ -320,6 +323,7 @@ impl Config {
             "side_width": self.side_width,
             "lyrics_width": self.lyrics_width,
             "footer": self.footer,
+            "sources": self.sources,
             "discord": self.discord,
             "cover_colors": self.cover_colors,
             "desktop": self.desktop.key(),

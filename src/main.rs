@@ -494,11 +494,12 @@ impl App {
 
     /// Cómo sale la cuenta en los ajustes.
     pub fn account_name(&self) -> String {
-        match (self.api.authed(), self.api.browser()) {
-            (false, _) => self.s().account_none.into(),
-            (true, Some(b)) => login::name_of(&b),
-            (true, None) => self.s().account_pasted.into(),
-        }
+        let who = match (self.api.authed(), self.api.browser()) {
+            (false, _) => None,
+            (true, Some(b)) => Some(login::name_of(&b)),
+            (true, None) => Some(self.s().account_pasted.to_string()),
+        };
+        settings::linked(self.s(), who)
     }
 
     pub fn s(&self) -> &'static Strings {
