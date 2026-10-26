@@ -146,7 +146,15 @@ struct Auth {
 
 impl Auth {
     fn from_json(v: &Value) -> Option<Auth> {
-        let cookie = v["cookie"].as_str()?.to_string();
+        // las ST-… son estado de navegación (una por clic, ~1 KB): en Firefox y
+        // familia se acumulan y la cabecera pasa de lo que Google acepta (413)
+        let cookie = v["cookie"]
+            .as_str()?
+            .split(';')
+            .map(str::trim)
+            .filter(|c| !c.is_empty() && !c.starts_with("ST-"))
+            .collect::<Vec<_>>()
+            .join("; ");
         let sapisid = sapisid_of(&cookie)?;
         let authuser = v["authuser"].as_str().unwrap_or("0").to_string();
         Some(Auth { cookie, authuser, sapisid, browser: v["browser"].as_str().map(String::from) })
@@ -993,6 +1001,13 @@ mod tests {
         assert_eq!(back.duration, "3:21");
         assert_eq!(back.browse_id, None);
         assert_eq!(back.cover_url().unwrap(), "https://lh3.googleusercontent.com/x=w544-h544-l90-rj");
+    }
+
+    #[test]
+    fn auth_drops_st_cookies() {
+        let a = Auth::from_json(&json!({ "cookie": "SAPISID=x; ST-1abc=csn=1&itct=2; HSID=y; ST-9=z" })).unwrap();
+        assert_eq!(a.cookie, "SAPISID=x; HSID=y");
+        assert_eq!(a.sapisid, "x");
     }
 
     #[test]
