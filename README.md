@@ -255,6 +255,15 @@ En la barra de lo que suena, `(=^･ω･^=)` baila cuando suena, duerme en paus
 se sorprende con cada canción nueva, se enamora con tus me gusta y llora si algo
 falla. Se quita en `o` → Apariencia.
 
+## Visualizador
+
+`o` → Apariencia → «Visualizador de verdad»: con [cava](https://github.com/karlstav/cava)
+instalado (`sudo pacman -S cava`), dos filas de barras bajo lo que suena que
+siguen la música de verdad (y el ecualizador chico también). cava corre solo
+mientras se ve y algo suena (~1 % de CPU); al pausar, apagarlo o cerrar la
+ventana, se cierra. Oye todo lo que suena en el equipo, no solo a rola. Para
+escuchar otra salida: `ROLA_CAVA_SOURCE=<monitor de pulse/pipewire>`.
+
 ## Ratón
 
 Clic en la barra lateral abre; en una canción la elige, doble clic la pone y

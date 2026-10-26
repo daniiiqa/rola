@@ -28,6 +28,7 @@ mod spotify;
 mod stats;
 mod stream;
 mod theme;
+mod viz;
 mod ui;
 
 use api::{Api, Item, Kind};
@@ -304,6 +305,8 @@ struct App {
     song_start: Instant,          // para que el título largo empiece quieto
     splash: Option<Instant>,      // canción nueva: su nombre arriba un momento
     pet_mood: Option<(Mood, Instant)>, // el gatito, contento o triste un rato
+    viz: Option<viz::Viz>,        // cava corriendo (solo mientras se ve y suena)
+    cava: Option<bool>,           // ¿está cava? (se mira la primera vez que hace falta)
     hits: RefCell<mouse::Hits>,   // dónde quedó cada cosa al dibujar
     last_click: Option<(Instant, u16, u16)>,
     mpris: Option<mpris::Mpris>,
@@ -445,6 +448,8 @@ impl App {
             song_start: Instant::now(),
             splash: None,
             pet_mood: None,
+            viz: None,
+            cava: None,
             hits: RefCell::default(),
             last_click: None,
             mpris: mpris::Mpris::start(tx.clone()),
@@ -2773,6 +2778,21 @@ impl App {
         });
     }
 
+    /// cava, solo si se pidió, algo suena y hay quien lo vea.
+    fn viz_sync(&mut self, hidden: bool) {
+        let want = self.cfg.viz && self.playing() && !hidden;
+        if want && self.viz.is_none() {
+            let ok = *self.cava.get_or_insert_with(viz::available);
+            if !ok {
+                self.cfg.viz = false;
+                return self.notify(self.s().viz_missing, true);
+            }
+            self.viz = viz::Viz::start();
+        } else if !want && self.viz.is_some() {
+            self.viz = None;
+        }
+    }
+
     fn toggle_autoplay(&mut self) {
         self.autoplay = !self.autoplay;
         let s = self.s();
@@ -3044,6 +3064,9 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         // time-pos llega muchas veces por segundo; la barra no necesita tanto
         let every = if app.animating() { 120 } else { 250 };
         let hidden = HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+        app.viz_sync(hidden);
+        // con el visualizador, más seguido (cava manda 20 por segundo)
+        let every = if app.viz.is_some() { 60 } else { every };
         if !hidden && (urgent || last_draw.elapsed() >= Duration::from_millis(every)) {
             if let Err(e) = term.draw(|f| app.draw(f)) {
                 break Err(e);

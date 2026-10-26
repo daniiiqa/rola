@@ -37,6 +37,7 @@ pub enum Setting {
     Footer,
     Motion,
     Pet,
+    Viz,
     Cover,
     Quality,
     VolStep,
@@ -68,6 +69,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Footer,
             Setting::Motion,
             Setting::Pet,
+            Setting::Viz,
             Setting::Cover,
         ],
     ),
@@ -107,6 +109,7 @@ impl Setting {
             Setting::Footer => s.set_footer,
             Setting::Motion => s.set_motion,
             Setting::Pet => s.set_pet,
+            Setting::Viz => s.set_viz,
             Setting::Cover => s.set_cover,
             Setting::Quality => s.set_quality,
             Setting::VolStep => s.set_vol_step,
@@ -142,6 +145,7 @@ impl Setting {
             Setting::Footer => "footer",
             Setting::Motion => "motion",
             Setting::Pet => "pet",
+            Setting::Viz => "viz",
             Setting::Quality => "quality",
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
@@ -201,6 +205,7 @@ impl App {
             Setting::Footer => yn(c.footer),
             Setting::Motion => yn(c.motion),
             Setting::Pet => yn(c.pet),
+            Setting::Viz => yn(c.viz),
             Setting::Cover => yn(self.cover_on),
             Setting::Quality => s.qualities[idx(c.quality)].into(),
             Setting::VolStep => format!("{}%", c.vol_step),
@@ -267,6 +272,7 @@ impl App {
             Setting::Footer => c.footer = !c.footer,
             Setting::Motion => c.motion = !c.motion,
             Setting::Pet => c.pet = !c.pet,
+            Setting::Viz => c.viz = !c.viz,
             Setting::Cover => {
                 self.cover_on = !self.cover_on;
                 self.fetch_cover();

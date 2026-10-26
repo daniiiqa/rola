@@ -180,6 +180,7 @@ pub struct Config {
     pub offline_mb: u64, // tope de lo guardado sin conexión; 0: nada
     pub motion: bool, // ecualizador, títulos que se desplazan, aviso de canción nueva
     pub pet: bool, // el gatito de la barra
+    pub viz: bool, // el visualizador de verdad (con cava)
     pub quality: Quality,
     pub vol_step: i64,
     pub seek: i64,
@@ -233,6 +234,7 @@ impl Default for Config {
             offline_mb: 0,
             motion: true,
             pet: true,
+            viz: false,
             quality: Quality::Best,
             vol_step: 5,
             seek: 5,
@@ -299,6 +301,7 @@ impl Config {
             offline_mb: v["offline_mb"].as_u64().unwrap_or(d.offline_mb),
             motion: v["motion"].as_bool().unwrap_or(d.motion),
             pet: v["pet"].as_bool().unwrap_or(d.pet),
+            viz: v["viz"].as_bool().unwrap_or(d.viz),
             quality: pick(&v["quality"], d.quality),
             vol_step: num("vol_step", d.vol_step as u64, 1, 25) as i64,
             seek: num("seek", d.seek as u64, 1, 300) as i64,
@@ -339,6 +342,7 @@ impl Config {
             "offline_mb": self.offline_mb,
             "motion": self.motion,
             "pet": self.pet,
+            "viz": self.viz,
             "quality": self.quality.key(),
             "vol_step": self.vol_step,
             "seek": self.seek,

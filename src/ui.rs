@@ -3,6 +3,7 @@ use crate::config::{Bar, Labels, Select, Tint};
 use crate::i18n::fill;
 use crate::mouse::{Button, Hits};
 use crate::settings::{self, SECTIONS};
+use crate::viz;
 use crate::{App, Focus, Lyrics, Mood, Popup, Repeat, Side, Sleep, SPLASH};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -203,12 +204,39 @@ impl App {
         Some(face.to_string())
     }
 
+    /// Las barras de cava, a lo ancho y de dos filas (16 alturas).
+    fn draw_spectrum(&self, f: &mut Frame, area: Rect, levels: &[f64]) {
+        let lv: &[char] = if self.cfg.bar == Bar::Ascii { &[' ', '.', '-', '=', '#'] } else { &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] };
+        let steps = (lv.len() - 1) as f64;
+        let cols = viz::spread(levels, area.width as usize);
+        let rows = area.height.max(1);
+        let mut lines = Vec::new();
+        for r in 0..rows {
+            // de arriba abajo: cada fila, su tramo de la altura
+            let from = f64::from(rows - 1 - r) / f64::from(rows);
+            let spans: Vec<Span> = cols
+                .iter()
+                .enumerate()
+                .map(|(c, &v)| {
+                    let k = ((v - from) * f64::from(rows) * steps).round().clamp(0.0, steps) as usize;
+                    Span::styled(lv[k].to_string(), Style::new().fg(self.gradient(c as f64 / area.width.max(1) as f64)))
+                })
+                .collect();
+            lines.push(Line::from(spans));
+        }
+        f.render_widget(Paragraph::new(lines), area);
+    }
+
     fn eq(&self, n: usize) -> String {
         let lv: &[char] = if self.cfg.bar == Bar::Ascii {
             &['_', '.', '-', '=', '#']
         } else {
             &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
         };
+        // con cava, las de verdad
+        if let Some(v) = &self.viz {
+            return viz::spread(&v.levels(), n).iter().map(|x| lv[((x * lv.len() as f64) as usize).min(lv.len() - 1)]).collect();
+        }
         let t = self.epoch.elapsed().as_secs_f64();
         (0..n)
             .map(|k| {
@@ -309,7 +337,8 @@ impl App {
         let [search, body, bar, footer] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Fill(1),
-            Constraint::Length(4),
+            // con el visualizador, dos filas más para sus barras
+            Constraint::Length(if self.viz.is_some() { 6 } else { 4 }),
             Constraint::Length(self.cfg.footer as u16),
         ])
         .areas(f.area());
@@ -1415,7 +1444,10 @@ impl App {
         let inner = block.inner(area).inner(ratatui::layout::Margin::new(1, 0));
         f.render_widget(block, area);
         self.hits.borrow_mut().bar = area;
-        let [top, prog] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+        let [top, prog, spec] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+        if let Some(v) = &self.viz {
+            self.draw_spectrum(f, spec, &v.levels());
+        }
 
         let on = |b: bool| if b { Style::new().fg(t.primary).bold() } else { Style::new().fg(t.muted) };
         let w = self.s().words;
