@@ -5,6 +5,7 @@
 
 mod api;
 mod bar;
+mod cache;
 mod config;
 mod discord;
 mod hypr;
@@ -62,7 +63,8 @@ pub enum Ev {
     ScrobbleIn(Result<(String, String), String>),
     Party(party::Req), // lo que piden desde la página de la fiesta
     RetryHome,         // el inicio falló al arrancar: otra vez
-    Info { vid: String, res: Result<api::SongInfo, String> }, // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
+    Info { vid: String, res: Result<api::SongInfo, String> },
+    Cached { vid: String, gone: Vec<String> }, // una más guardada sin conexión (y las que salieron) // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
@@ -211,6 +213,10 @@ struct App {
     rpc: Option<Sender<discord::Presence>>, // el estado de Discord
     rpc_last: (u64, discord::Presence),     // lo último mandado (con su track_n)
     bar_last: Value,                        // lo último escrito para la barra
+    cached: HashSet<String>,                // guardadas sin conexión
+    plays: HashMap<String, usize>,          // veces oída cada una (para saber cuáles guardar)
+    dl: Option<Sender<(String, String, u64)>>, // el hilo que las baja
+    local: Option<String>,                  // la actual suena del disco (su ruta)
     lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
     popup: Option<Popup>,
     picker: Picker,
@@ -338,6 +344,10 @@ impl App {
             rpc: None,
             rpc_last: (0, None),
             bar_last: Value::Null,
+            cached: cache::list(),
+            plays: stats::counts(&data_dir().join("history.jsonl")),
+            dl: None,
+            local: None,
             lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
             popup: None,
             picker,
@@ -404,6 +414,10 @@ impl App {
 
     fn start(mut self) -> App {
         self.apply_sound();
+        // lo que tocaba guardar y no dio tiempo (o se borró a mano)
+        if self.cfg.offline_mb > 0 {
+            self.offline_changed();
+        }
         self.load_account();
         // sin cuenta: ofrecer entrar desde el navegador (una vez; luego, en ajustes)
         if !self.api.authed() && !self.login_skipped && !login::browsers().is_empty() {
@@ -757,6 +771,19 @@ impl App {
         self.dur = None;
         self.waiting = None;
         self.upgrade = None;
+        self.local = None;
+        // guardada sin conexión: del disco, al instante
+        if let Some(p) = self.cached.contains(&vid).then(|| cache::find(&vid)).flatten() {
+            cache::touch(&p);
+            let title = self.queue[i].title.clone();
+            self.direct = true;
+            self.local = Some(p.display().to_string());
+            self.mpv.load(&vid, self.local.as_deref(), &title, start);
+            if self.lyrics_on {
+                self.fetch_lyrics();
+            }
+            return self.fetch_cover();
+        }
         match self.streams.get(&vid).filter(|l| l.fresh()).cloned() {
             // lo bastante pronto: mejor esperar un momento que empezar en baja
             Some(link) if link.wait() < Duration::from_millis(1500) => self.start_link(vid, link, start),
@@ -1306,6 +1333,15 @@ impl App {
                         };
                     }
                 }
+                if error && self.local.is_some() {
+                    if let (Some(q), Some(vid)) = (self.qi, self.current().and_then(|x| x.video_id.clone())) {
+                        if let Some(p) = self.local.take() {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        self.cached.remove(&vid);
+                        return self.play_index(q);
+                    }
+                }
                 if error && self.direct {
                     if let (Some(q), Some(vid)) = (self.qi, self.current().and_then(|x| x.video_id.clone())) {
                         self.streams.remove(&vid);
@@ -1367,6 +1403,12 @@ impl App {
                             Err(e) => *err = Some(e),
                         }
                     }
+                }
+            }
+            Ev::Cached { vid, gone } => {
+                self.cached.insert(vid);
+                for g in gone {
+                    self.cached.remove(&g);
                 }
             }
             Ev::RetryHome => {
@@ -1711,7 +1753,19 @@ impl App {
         if secs >= stats::MIN_SECS {
             let play = stats::Play { t: unix_now(), title: it.title.clone(), artist: it.artist.clone(), secs };
             stats::log(&data_dir().join("history.jsonl"), &play, it.video_id.as_deref().unwrap_or(""));
+            if let Some(vid) = it.video_id.clone() {
+                let n = self.plays.entry(vid.clone()).or_default();
+                *n += 1;
+                if *n >= cache::PLAYS {
+                    self.keep_offline(vid);
+                }
+            }
         }
+        self.scrobble_end(secs);
+    }
+
+    fn scrobble_end(&mut self, secs: f64) {
+        let Some(it) = self.current() else { return };
         if let Some((_, tx)) = &self.lb {
             if scrobble::counts(secs, self.dur) {
                 let _ = tx.send(scrobble::Job::Listen(self.track_of(it), self.song_unix));
@@ -1822,6 +1876,29 @@ impl App {
                 }
             }
             _ => self.popup = None,
+        }
+    }
+
+    // ── sin conexión ──
+    /// A la cola de descargas, si se guardan y aún no está.
+    fn keep_offline(&mut self, vid: String) {
+        if self.cfg.offline_mb == 0 || self.cached.contains(&vid) {
+            return;
+        }
+        let tx = self.dl.get_or_insert_with(|| cache::start(self.tx.clone()));
+        let _ = tx.send((vid, self.cfg.quality.ytdl_format().to_string(), self.cfg.offline_mb));
+    }
+
+    /// Cambió el tope: lo que sobre, fuera (con 0, todo); con sitio, las más
+    /// puestas a la cola de descargas.
+    pub fn offline_changed(&mut self) {
+        for vid in cache::evict(self.cfg.offline_mb) {
+            self.cached.remove(&vid);
+        }
+        let mut top: Vec<(String, usize)> = self.plays.iter().filter(|(_, n)| **n >= cache::PLAYS).map(|(v, n)| (v.clone(), *n)).collect();
+        top.sort_by_key(|x| std::cmp::Reverse(x.1));
+        for (vid, _) in top.into_iter().take(300) {
+            self.keep_offline(vid);
         }
     }
 
@@ -2022,15 +2099,22 @@ impl App {
             return;
         }
         let Some(next) = self.queue.get(qi + 1).and_then(|n| n.video_id.clone()) else { return };
-        if !self.streams.get(&next).is_some_and(|l| l.fresh() && l.wait().is_zero()) {
+        if !self.cached.contains(&next) && !self.streams.get(&next).is_some_and(|l| l.fresh() && l.wait().is_zero()) {
             return;
         }
         let Some(cur) = self.current().and_then(|c| c.video_id.clone()) else { return };
-        let Some(link) = self.streams.get(&cur).filter(|l| l.fresh()).cloned() else { return };
+        // lo que suena ahora: del disco o su enlace
+        let url = match &self.local {
+            Some(p) => p.clone(),
+            None => match self.streams.get(&cur).filter(|l| l.fresh()) {
+                Some(l) => l.url.clone(),
+                None => return,
+            },
+        };
         self.xfaded = self.track_n;
         let left = dur - pos;
         self.kill_ghost();
-        self.ghost = mpv::ghost(&link.url, pos, left, self.volume, self.cfg.sound.filter());
+        self.ghost = mpv::ghost(&url, pos, left, self.volume, self.cfg.sound.filter());
         self.fade_in = Some(left);
         self.play_index(qi + 1);
     }

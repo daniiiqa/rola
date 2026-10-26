@@ -1257,7 +1257,17 @@ impl App {
                     Cell::from(Span::styled(it.title.clone(), title_style)),
                     Cell::from(Span::styled(it.artist.clone(), muted)),
                     Cell::from(Span::styled(it.album.clone(), muted)),
-                    Cell::from(Line::styled(it.duration.clone(), muted).right_aligned()),
+                    // las guardadas sin conexión, con su marca
+                    Cell::from(
+                        Line::styled(
+                            match it.video_id.as_ref().filter(|v| self.cached.contains(*v)) {
+                                Some(_) => format!("{} {}", self.ic("\u{f01da}", "↓"), it.duration),
+                                None => it.duration.clone(),
+                            },
+                            muted,
+                        )
+                        .right_aligned(),
+                    ),
                 ]);
                 Row::new(cells)
             })

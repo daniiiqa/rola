@@ -118,6 +118,13 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Sin conexión
+
+`o` → «Sin conexión» (500 MB a 5 GB): las canciones que has oído 3 veces o más
+se guardan solas en `~/.cache/rola/audio` (de una en una, de fondo) y suenan
+del disco: al instante y sin internet. Llevan una ↓ en las listas. Si se llena,
+se van primero las que llevan más tiempo sin sonar; en «no», se borra todo.
+
 ## Waybar
 
 `rola --waybar` da lo que suena para un módulo custom: la canción en el color

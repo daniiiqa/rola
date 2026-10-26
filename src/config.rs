@@ -175,6 +175,7 @@ pub struct Config {
     pub desktop: Desktop,
     pub crossfade: u64, // segundos; 0: sin fundido
     pub sound: Sound,
+    pub offline_mb: u64, // tope de lo guardado sin conexión; 0: nada
     pub motion: bool, // ecualizador, títulos que se desplazan, aviso de canción nueva
     pub quality: Quality,
     pub vol_step: i64,
@@ -195,6 +196,7 @@ pub const VOL_STEPS: &[i64] = &[1, 2, 5, 10];
 pub const SEEKS: &[i64] = &[5, 10, 15, 30, 60];
 pub const NOTIFY_SECS: &[u64] = &[2, 4, 6, 10];
 pub const CROSSFADES: &[u64] = &[0, 3, 6, 9, 12];
+pub const OFFLINE_MBS: &[u64] = &[0, 500, 1000, 2000, 5000];
 
 /// El siguiente (o anterior) de `opts` a partir de `cur`, sin dar la vuelta.
 pub fn step_in<T: Copy + PartialOrd>(opts: &[T], cur: T, d: isize) -> T {
@@ -223,6 +225,7 @@ impl Default for Config {
             desktop: Desktop::Off,
             crossfade: 0,
             sound: Sound::Normal,
+            offline_mb: 0,
             motion: true,
             quality: Quality::Best,
             vol_step: 5,
@@ -285,6 +288,7 @@ impl Config {
             desktop: v["desktop"].as_str().and_then(Desktop::parse).unwrap_or(d.desktop),
             crossfade: v["crossfade"].as_u64().unwrap_or(d.crossfade).min(30),
             sound: pick(&v["sound"], d.sound),
+            offline_mb: v["offline_mb"].as_u64().unwrap_or(d.offline_mb),
             motion: v["motion"].as_bool().unwrap_or(d.motion),
             quality: pick(&v["quality"], d.quality),
             vol_step: num("vol_step", d.vol_step as u64, 1, 25) as i64,
@@ -321,6 +325,7 @@ impl Config {
             "desktop": self.desktop.key(),
             "crossfade": self.crossfade,
             "sound": self.sound.key(),
+            "offline_mb": self.offline_mb,
             "motion": self.motion,
             "quality": self.quality.key(),
             "vol_step": self.vol_step,

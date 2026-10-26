@@ -39,6 +39,17 @@ pub fn load(file: &Path) -> Vec<Play> {
         .collect()
 }
 
+/// Veces que se ha oído cada canción (por videoId).
+pub fn counts(file: &Path) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    for l in std::fs::read_to_string(file).unwrap_or_default().lines() {
+        if let Some(v) = serde_json::from_str::<Value>(l).ok().and_then(|v| v["vid"].as_str().map(String::from)).filter(|v| !v.is_empty()) {
+            *out.entry(v).or_default() += 1;
+        }
+    }
+    out
+}
+
 /// La hora local de un instante: (año, mes 1..12, día del año, día del mes, hora).
 pub fn local(t: i64) -> (i32, u32, u32, u32, u32) {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -154,7 +165,9 @@ mod tests {
         log(&f, &play(5, "A", "B", 31.25), "vid1");
         log(&f, &play(6, "C", "", 40.0), "vid2");
         let back = load(&f);
+        let n = counts(&f);
         let _ = std::fs::remove_file(&f);
+        assert_eq!((n["vid1"], n["vid2"]), (1, 1));
         assert_eq!(back.len(), 2);
         assert_eq!((back[0].title.as_str(), back[0].secs), ("A", 31.3));
     }

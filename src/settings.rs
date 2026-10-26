@@ -19,6 +19,7 @@ pub enum Setting {
     Desktop,
     Crossfade,
     Sound,
+    Offline,
     CoverColors,
     Theme,
     Background,
@@ -64,7 +65,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Cover,
         ],
     ),
-    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Crossfade, Setting::Sound, Setting::Autoplay]),
+    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Crossfade, Setting::Sound, Setting::Offline, Setting::Autoplay]),
 ];
 
 pub fn all() -> impl Iterator<Item = Setting> {
@@ -102,6 +103,7 @@ impl Setting {
             Setting::Seek => s.set_seek,
             Setting::Crossfade => s.set_crossfade,
             Setting::Sound => s.set_sound,
+            Setting::Offline => s.set_offline,
             Setting::Autoplay => s.set_autoplay,
         }
     }
@@ -132,6 +134,7 @@ impl Setting {
             Setting::Seek => "seek",
             Setting::Crossfade => "crossfade",
             Setting::Sound => "sound",
+            Setting::Offline => "offline_mb",
             Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord | Setting::Cover | Setting::Autoplay => return None,
         })
     }
@@ -179,6 +182,11 @@ impl App {
             Setting::Crossfade if c.crossfade == 0 => yn(false),
             Setting::Crossfade => format!("{} s", c.crossfade),
             Setting::Sound => s.sounds[idx(c.sound)].into(),
+            Setting::Offline if c.offline_mb == 0 => yn(false),
+            Setting::Offline => {
+                let mb = |m: u64| if m >= 1000 { format!("{} GB", m / 1000) } else { format!("{m} MB") };
+                format!("{} ({})", mb(c.offline_mb), crate::i18n::fill(s.offline_used, &[&mb(crate::cache::size_mb())]))
+            }
             Setting::Autoplay => yn(self.autoplay),
         }
     }
@@ -246,6 +254,10 @@ impl App {
             Setting::Sound => {
                 c.sound = c.sound.step(d);
                 self.apply_sound();
+            }
+            Setting::Offline => {
+                c.offline_mb = step_in(config::OFFLINE_MBS, c.offline_mb, d);
+                self.offline_changed();
             }
             Setting::Autoplay => self.autoplay = !self.autoplay,
         }

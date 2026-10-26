@@ -173,6 +173,8 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub offline_used: &'static str,
+    pub set_offline: &'static str,
     pub info_similar: &'static str,
     pub info_also: &'static str,
     pub info_more: &'static str,
@@ -460,6 +462,8 @@ pub static ES: Strings = Strings {
     info_more: "Más de {}",
     info_also: "Te puede gustar",
     info_similar: "Artistas parecidos",
+    set_offline: "Sin conexión: guardar las que más pones (hasta…)",
+    offline_used: "{} usados",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -701,5 +705,7 @@ pub static EN: Strings = Strings {
     info_more: "More by {}",
     info_also: "You might also like",
     info_similar: "Similar artists",
+    set_offline: "Offline: keep the songs you play most (up to…)",
+    offline_used: "{} used",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };
