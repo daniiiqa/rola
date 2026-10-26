@@ -200,6 +200,13 @@ pub struct Api {
 }
 
 /// Con la cookie caducada YouTube no da error: contesta como a un anónimo.
+const RETRY_AFTER: Duration = Duration::from_millis(800);
+
+/// Los errores de YouTube que suelen pasarse solos.
+fn transient(code: u16) -> bool {
+    matches!(code, 403 | 429 | 500 | 502 | 503 | 504)
+}
+
 fn logged_out(v: &Value) -> bool {
     v["responseContext"]["serviceTrackingParams"].as_array().into_iter().flatten().any(|p| {
         p["params"].as_array().into_iter().flatten().any(|kv| kv["key"] == "logged_in" && kv["value"] == "0")
@@ -276,10 +283,18 @@ impl Api {
             Err((code, _)) => matches!(code, Some(401 | 403)),
         };
         let res = match &auth {
-            Some(a) if stale && a.browser.is_some() && self.renew(a) => self.send(endpoint, body, self.current().as_deref()),
+            Some(a) if stale && a.browser.is_some() && self.renew(a) => self.send(endpoint, body.clone(), self.current().as_deref()),
             _ => res,
         };
-        res.map_err(|(_, e)| e)
+        // YouTube a veces dice que no un rato (403 sueltos, 429, 5xx) y al
+        // segundo sí: una vez más antes de enseñar el error
+        match res {
+            Err((Some(code), _)) if transient(code) => {
+                std::thread::sleep(RETRY_AFTER);
+                self.send(endpoint, body, self.current().as_deref()).map_err(|(_, e)| e)
+            }
+            r => r.map_err(|(_, e)| e),
+        }
     }
 
     fn send(&self, endpoint: &str, mut body: Value, auth: Option<&Auth>) -> Result<Value, (Option<u16>, String)> {
@@ -1022,6 +1037,12 @@ mod tests {
         assert_eq!(back.duration, "3:21");
         assert_eq!(back.browse_id, None);
         assert_eq!(back.cover_url().unwrap(), "https://lh3.googleusercontent.com/x=w544-h544-l90-rj");
+    }
+
+    #[test]
+    fn retries_only_transient() {
+        assert!([403, 429, 500, 503].iter().all(|&c| transient(c)));
+        assert!(![400, 401, 404].iter().any(|&c| transient(c)));
     }
 
     #[test]
