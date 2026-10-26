@@ -328,6 +328,7 @@ impl App {
             Some(Popup::Spotify { .. }) => self.draw_spotify(f),
             Some(Popup::Wrapped { period, plays }) => self.draw_wrapped(f, *period, plays),
             Some(Popup::Scrobble { .. }) => self.draw_scrobble(f),
+            Some(Popup::LastFm { .. }) => self.draw_lastfm(f),
             Some(Popup::Party) => self.draw_party(f),
             Some(Popup::Discord { .. }) => self.draw_discord(f),
             Some(Popup::Info { .. }) => self.draw_info(f),
@@ -1136,6 +1137,50 @@ impl App {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 
+    fn draw_lastfm(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::LastFm { key, secret, field, busy, err }) = &self.popup else { return };
+        let mut lines: Vec<Line> = Vec::new();
+        if let Some((user, _)) = &self.lfm {
+            lines.push(Line::styled(fill(s.lfm_connected, &[user]), Style::new().fg(t.primary)));
+            lines.push(Line::styled(self.tx(s.sp_disconnect_hint), Style::new().fg(t.muted)));
+            lines.push(Line::raw(""));
+        }
+        for (i, l) in s.lfm_steps.iter().enumerate() {
+            lines.push(Line::styled(*l, Style::new().fg(if i == 0 { t.muted } else { t.fg })));
+        }
+        lines.push(Line::raw(""));
+        // el secreto no se enseña: solo sus 4 últimas
+        let hide = |v: &str| {
+            let n = v.chars().count();
+            "•".repeat(n.saturating_sub(4)) + &v.chars().skip(n.saturating_sub(4)).collect::<String>()
+        };
+        for (i, (label, value)) in [("API key: ", key.clone()), ("Shared secret: ", hide(secret))].into_iter().enumerate() {
+            let on = usize::from(*field) == i && busy.is_none();
+            lines.push(Line::from(vec![
+                Span::styled(label, Style::new().fg(if on { t.primary } else { t.muted }).bold()),
+                Span::styled(value, Style::new().fg(t.fg)),
+                Span::styled(if on { "▏" } else { "" }, Style::new().fg(t.primary)),
+            ]));
+        }
+        if let Some(b) = busy {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(self.tx(b), Style::new().fg(t.primary).italic()));
+        } else if let Some(e) = err {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(e.clone(), Style::new().fg(t.accent)));
+        }
+        let w = 84.min(f.area().width.saturating_sub(4));
+        let h: u16 = lines.iter().map(|l| (l.width() as u16).div_ceil(w.saturating_sub(4).max(1)).max(1)).sum();
+        let area = self.popup_area(f, w, h + 2);
+        self.hits.borrow_mut().popup = area;
+        let block = self
+            .block(true)
+            .title(Line::styled(" Last.fm ", Style::new().fg(t.primary).bold()))
+            .padding(ratatui::widgets::Padding::horizontal(1));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+    }
+
     fn draw_search(&self, f: &mut Frame, area: Rect) {
         let t = self.theme;
         let focused = self.focus == Focus::Search;
@@ -1465,6 +1510,7 @@ impl App {
             (Some(Popup::Spotify { .. }), _) => s.foot_spotify,
             (Some(Popup::Wrapped { .. }), _) => s.foot_wrapped,
             (Some(Popup::Scrobble { .. }), _) => s.foot_spotify,
+            (Some(Popup::LastFm { .. }), _) => s.foot_spotify,
             (Some(Popup::Party), _) => s.foot_party,
             (Some(Popup::Discord { .. }), _) => s.foot_spotify,
             (Some(Popup::Info { .. }), _) => s.foot_info,

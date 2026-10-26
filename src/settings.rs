@@ -11,6 +11,7 @@ pub enum Setting {
     Account,
     Spotify,
     Scrobble,
+    LastFm,
     Discord,
     Lang,
     Restore,
@@ -47,7 +48,7 @@ type Section = (fn(&Strings) -> &'static str, &'static [Setting]);
 
 /// Secciones con sus ajustes, en el orden en que salen.
 pub const SECTIONS: &[Section] = &[
-    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::Discord, Setting::Lang, Setting::Restore, Setting::KeepPlaying, Setting::Mouse, Setting::Notify, Setting::Desktop]),
+    (|s| s.sec_general, &[Setting::Account, Setting::Spotify, Setting::Scrobble, Setting::LastFm, Setting::Discord, Setting::Lang, Setting::Restore, Setting::KeepPlaying, Setting::Mouse, Setting::Notify, Setting::Desktop]),
     (
         |s| s.sec_look,
         &[
@@ -81,6 +82,7 @@ impl Setting {
             Setting::Account => s.set_account,
             Setting::Spotify => s.set_spotify,
             Setting::Scrobble => s.set_scrobble,
+            Setting::LastFm => s.set_lastfm,
             Setting::Discord => s.set_discord,
             Setting::Lang => s.set_lang,
             Setting::Restore => s.set_restore,
@@ -142,7 +144,7 @@ impl Setting {
             Setting::Crossfade => "crossfade",
             Setting::Sound => "sound",
             Setting::Offline => "offline_mb",
-            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord | Setting::Cover | Setting::Autoplay => return None,
+            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::LastFm | Setting::Discord | Setting::Cover | Setting::Autoplay => return None,
         })
     }
 }
@@ -168,6 +170,7 @@ impl App {
             Setting::Account => self.account_name(),
             Setting::Spotify => linked(s, self.spotify.as_ref().map(|s| s.user())),
             Setting::Scrobble => linked(s, self.lb.as_ref().map(|l| l.0.clone())),
+            Setting::LastFm => linked(s, self.lfm.as_ref().map(|l| l.0.clone())),
             Setting::Discord => linked(s, (!c.discord.is_empty()).then(String::new)),
             Setting::Lang => s.lang_name.into(),
             Setting::Restore => yn(c.restore),
@@ -210,7 +213,7 @@ impl App {
     }
 
     fn change(&mut self, k: Setting, d: isize) {
-        if matches!(k, Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord) {
+        if matches!(k, Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::LastFm | Setting::Discord) {
             // los ajustes se guardan aquí: el popup de la cuenta los sustituye
             let _ = self.cfg.save();
             self.cfg_mtimes = config::mtimes();
@@ -218,12 +221,15 @@ impl App {
                 Setting::Account => self.open_login(),
                 Setting::Spotify => self.open_spotify(),
                 Setting::Discord => self.popup = Some(Popup::Discord { input: self.cfg.discord.clone(), err: None }),
+                Setting::LastFm => {
+                    self.popup = Some(Popup::LastFm { key: String::new(), secret: String::new(), field: 0, busy: None, err: None })
+                }
                 _ => self.popup = Some(Popup::Scrobble { input: String::new(), busy: false, err: None }),
             };
         }
         let c = &mut self.cfg;
         match k {
-            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord => {}
+            Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::LastFm | Setting::Discord => {}
             Setting::Lang => {
                 let old = c.lang;
                 c.lang = c.lang.step(d);

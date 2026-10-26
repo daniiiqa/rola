@@ -212,6 +212,17 @@ va a tu perfil («sonando ahora» y cada canción oída a la mitad, o 4 minutos)
 Sin conexión, se reintenta luego. El token queda en
 `~/.local/share/rola/listenbrainz.json` (0600).
 
+
+## Last.fm
+
+`o` → Last.fm. Como con Spotify, la app es tuya: en
+[last.fm/api/account/create](https://www.last.fm/api/account/create) (con tu
+cuenta) le pones de nombre «rola» y dejas lo demás vacío; pegas la «API key» y
+el «Shared secret», Enter, y le das permiso en el navegador que se abre. Desde
+ahí, igual que ListenBrainz: «sonando ahora» y la escucha (media canción o 4
+minutos); sin red, se guardan y se mandan luego. Pueden ir los dos a la vez.
+Queda en `~/.local/share/rola/lastfm.json` (0600); Ctrl+D en esa ventana lo
+desconecta.
 ## Colores de la portada
 
 `o` → «Colores de la portada»: el color principal y el de acento salen de la

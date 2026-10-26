@@ -11,6 +11,7 @@ mod discord;
 mod hypr;
 mod i18n;
 mod keys;
+mod lastfm;
 mod login;
 mod lrclib;
 mod mouse;
@@ -56,6 +57,8 @@ pub enum Ev {
     Loaded { seq: u64, title: String, reset: bool, radio: bool, playlist: Option<String>, res: Result<Vec<Item>, String> },
     Created(Result<(String, usize), String>), // playlist nueva: nombre y canciones
     Accounts(Choosing),                       // varias cuentas en el navegador: a elegir
+    LfmWaiting,                               // Last.fm: abierto el navegador, a que lo autorices
+    LfmIn(Result<lastfm::Session, String>),
     Opened { vid: String, res: Result<Vec<Item>, String> }, // `rola play …`: la canción y su radio
     Removed { playlist: String, video_id: String, title: String, res: Result<(), String> },
     Playlists(Vec<Item>),
@@ -139,6 +142,8 @@ pub enum Popup {
     Party,
     /// ListenBrainz: el token que se va pegando
     Scrobble { input: String, busy: bool, err: Option<String> },
+    // Last.fm: la API key y su secreto (field: cuál se escribe), y en qué va
+    LastFm { key: String, secret: String, field: u8, busy: Option<String>, err: Option<String> },
     /// rola wrapped: lo escuchado, por periodo (0 mes, 1 año, 2 siempre)
     Wrapped { period: usize, plays: Vec<stats::Play> },
     /// conectar Spotify: el Client ID que se va escribiendo
@@ -267,6 +272,7 @@ struct App {
     dl: Option<Sender<(String, String, u64)>>, // el hilo que las baja
     local: Option<String>,                  // la actual suena del disco (su ruta)
     lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
+    lfm: Option<(String, Sender<scrobble::Job>)>, // Last.fm: lo mismo
     popup: Option<Popup>,
     picker: Picker,
     cover_on: bool,
@@ -402,6 +408,7 @@ impl App {
             dl: None,
             local: None,
             lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
+            lfm: lastfm::load(&data_dir().join("lastfm.json")).map(|s| (s.user.clone(), lastfm::start(s))),
             popup: None,
             picker,
             cover_on: st["cover"].as_bool().unwrap_or(true),
@@ -840,8 +847,10 @@ impl App {
         self.splash = Some(Instant::now());
         self.song_unix = unix_now();
         self.announce(i);
-        if let (Some((_, tx)), Some(it)) = (&self.lb, self.queue.get(i)) {
-            let _ = tx.send(scrobble::Job::Now(self.track_of(it)));
+        if let Some(it) = self.queue.get(i) {
+            for tx in self.scrobblers() {
+                let _ = tx.send(scrobble::Job::Now(self.track_of(it)));
+            }
         }
         // el fundido: la que entra sube desde cero; las demás, sin filtro
         let fade = self.fade_in.take();
@@ -1273,6 +1282,9 @@ impl App {
             if matches!(popup, Popup::Wrapped { .. }) {
                 return self.wrapped_key(k);
             }
+            if matches!(popup, Popup::LastFm { .. }) {
+                return self.lastfm_key(k);
+            }
             if matches!(popup, Popup::Scrobble { .. }) {
                 return self.scrobble_key(k);
             }
@@ -1599,6 +1611,30 @@ impl App {
                 Err(e) => {
                     if let Some(Popup::Scrobble { busy, err, .. }) = &mut self.popup {
                         *busy = false;
+                        *err = Some(e);
+                    }
+                }
+            },
+            Ev::LfmWaiting => {
+                let msg = self.s().lfm_waiting;
+                if let Some(Popup::LastFm { busy, .. }) = &mut self.popup {
+                    *busy = Some(msg.into());
+                }
+            }
+            Ev::LfmIn(res) => match res {
+                Ok(sess) => {
+                    if let Err(e) = lastfm::save(&data_dir().join("lastfm.json"), &sess) {
+                        self.notify(e, true);
+                    }
+                    self.notify(fill(self.s().lfm_connected, &[&sess.user]), false);
+                    self.lfm = Some((sess.user.clone(), lastfm::start(sess)));
+                    if matches!(self.popup, Some(Popup::LastFm { .. })) {
+                        self.popup = None;
+                    }
+                }
+                Err(e) => {
+                    if let Some(Popup::LastFm { busy, err, .. }) = &mut self.popup {
+                        *busy = None;
                         *err = Some(e);
                     }
                 }
@@ -2011,10 +2047,68 @@ impl App {
 
     fn scrobble_end(&mut self, secs: f64) {
         let Some(it) = self.current() else { return };
-        if let Some((_, tx)) = &self.lb {
-            if scrobble::counts(secs, self.dur) {
+        if scrobble::counts(secs, self.dur) {
+            for tx in self.scrobblers() {
                 let _ = tx.send(scrobble::Job::Listen(self.track_of(it), self.song_unix));
             }
+        }
+    }
+
+    /// A dónde va lo que escuchas: ListenBrainz y Last.fm, los que estén.
+    fn scrobblers(&self) -> impl Iterator<Item = &Sender<scrobble::Job>> {
+        self.lb.iter().chain(self.lfm.iter()).map(|(_, tx)| tx)
+    }
+
+    // ── Last.fm ──
+    fn lastfm_key(&mut self, k: KeyEvent) {
+        let s = self.s();
+        let Some(Popup::LastFm { key, secret, field, busy, err }) = &mut self.popup else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if k.code == KeyCode::Esc {
+            self.popup = None;
+            return;
+        }
+        if busy.is_some() {
+            return; // esperando a Last.fm (o a que lo autorices)
+        }
+        fn pick<'a>(field: u8, key: &'a mut String, secret: &'a mut String) -> &'a mut String {
+            if field == 0 { key } else { secret }
+        }
+        match k.code {
+            KeyCode::Tab | KeyCode::Down | KeyCode::Up | KeyCode::BackTab => *field = 1 - *field,
+            KeyCode::Enter if *field == 0 => *field = 1,
+            KeyCode::Enter => {
+                let (key, secret) = (key.trim().to_string(), secret.trim().to_string());
+                if key.is_empty() || secret.is_empty() {
+                    return;
+                }
+                *busy = Some(s.lfm_asking.into());
+                *err = None;
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let res = lastfm::token(&key, &secret).and_then(|tok| {
+                        // tú lo autorizas allí; aquí se espera la sesión
+                        let _ = tx.send(Ev::LfmWaiting);
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(lastfm::auth_url(&key, &tok))
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                        lastfm::session(&key, &secret, &tok)
+                    });
+                    let _ = tx.send(Ev::LfmIn(res));
+                });
+            }
+            KeyCode::Char('d') if ctrl && self.lfm.is_some() => {
+                let _ = std::fs::remove_file(data_dir().join("lastfm.json"));
+                self.lfm = None;
+                self.popup = None;
+                self.notify(s.lfm_disconnected, false);
+            }
+            KeyCode::Char('u') if ctrl => pick(*field, key, secret).clear(),
+            KeyCode::Backspace => drop(pick(*field, key, secret).pop()),
+            KeyCode::Char(c) if !ctrl => pick(*field, key, secret).push(c),
+            _ => {}
         }
     }
 
