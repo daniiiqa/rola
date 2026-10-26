@@ -124,11 +124,12 @@ impl Item {
             _ => return None,
         };
         let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
+        let c = |k: &str| clean(v[k].as_str().unwrap_or(""));
         Some(Item {
             kind,
-            title: s("title"),
-            artist: s("artist"),
-            album: s("album"),
+            title: untitled(c("title")),
+            artist: c("artist"),
+            album: c("album"),
             duration: s("duration"),
             video_id: v["video_id"].as_str().map(String::from),
             browse_id: v["browse_id"].as_str().map(String::from),
@@ -511,7 +512,7 @@ impl Api {
         for r in runs(byline) {
             let text = r["text"].as_str().unwrap_or("");
             match r["navigationEndpoint"]["browseEndpoint"]["browseId"].as_str() {
-                Some(id) if id.starts_with("MPRE") => info.album = text.to_string(),
+                Some(id) if id.starts_with("MPRE") => info.album = clean(text),
                 Some(id) if id.starts_with("UC") && artist_id.is_none() => artist_id = Some(id.to_string()),
                 _ if text.len() == 4 && text.chars().all(|c| c.is_ascii_digit()) => info.year = text.to_string(),
                 _ => {}
@@ -731,7 +732,22 @@ fn runs(v: &Value) -> &[Value] {
 }
 
 fn runs_text(v: &Value) -> String {
-    runs(v).iter().filter_map(|r| r["text"].as_str()).collect()
+    clean(&runs(v).iter().filter_map(|r| r["text"].as_str()).collect::<String>())
+}
+
+/// Sin lo invisible que trae a veces YouTube en títulos y artistas: controles,
+/// marcas de dirección, espacios de ancho cero y los rellenos de hangul
+/// (U+3164…), que la terminal pinta anchos y ratatui mide como nada, así que
+/// descuadran toda la tabla. El ZWJ se queda: los emojis compuestos lo usan.
+pub fn clean(s: &str) -> String {
+    let invisible = |c: char| {
+        c.is_control()
+            || matches!(c as u32,
+                0x00AD | 0x061C | 0x115F | 0x1160 | 0x180E | 0x200B | 0x200C | 0x200E | 0x200F
+                | 0x202A..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFEFF | 0xFFA0 | 0xFFF9..=0xFFFB
+                | 0xE0000..=0xE0FFF)
+    };
+    s.chars().filter(|&c| !invisible(c)).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn page_type(nav: &Value) -> Option<(&str, &str)> {
@@ -809,14 +825,19 @@ fn finish(kind: Kind, title: String, meta: Meta, video_id: Option<String>, brows
     };
     Item {
         kind,
-        artist: if kind == Kind::Artist { String::new() } else { meta.artist() },
-        album: meta.album,
+        artist: if kind == Kind::Artist { String::new() } else { clean(&meta.artist()) },
+        album: clean(&meta.album),
         duration: meta.duration,
-        title,
+        title: untitled(clean(&title)),
         video_id,
         browse_id,
         thumb: String::new(),
     }
+}
+
+/// Un título que era solo invisibles: algo tiene que verse en la fila.
+fn untitled(t: String) -> String {
+    if t.is_empty() { "—".into() } else { t }
 }
 
 fn video_kind(watch: &Value) -> Kind {
@@ -1008,6 +1029,23 @@ mod tests {
         let a = Auth::from_json(&json!({ "cookie": "SAPISID=x; ST-1abc=csn=1&itct=2; HSID=y; ST-9=z" })).unwrap();
         assert_eq!(a.cookie, "SAPISID=x; HSID=y");
         assert_eq!(a.sapisid, "x");
+    }
+
+    #[test]
+    fn clean_invisible() {
+        // el de music.youtube.com/watch?v=YCQ4YFndiiI
+        let title = "\u{200e}\u{200e}\u{200e}\u{3164}";
+        let artist = format!("{}IHAF", "\u{3164}".repeat(46));
+        assert_eq!(clean(title), "");
+        assert_eq!(clean(&artist), "IHAF");
+        let it = Item::from_json(&json!({"kind": "song", "title": title, "artist": artist, "video_id": "x"})).unwrap();
+        assert_eq!((it.title.as_str(), it.artist.as_str()), ("—", "IHAF"));
+        // lo normal no se toca: acentos, CJK, emojis compuestos (ZWJ)
+        for s in ["Canción de Ñu", "夜に駆ける", "👨\u{200d}👩\u{200d}👧 family", "Ünïcödé — x"] {
+            assert_eq!(clean(s), s);
+        }
+        // ni escapes de terminal ni overrides de dirección; espacios de uno en uno
+        assert_eq!(clean("a\u{1b}[2Jb  \t c\u{202e}d"), "a[2Jb cd");
     }
 
     #[test]

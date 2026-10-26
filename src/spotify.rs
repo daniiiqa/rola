@@ -6,7 +6,7 @@
 //! Entrar es OAuth con PKCE contra una app de desarrollador propia (Spotify ya
 //! no deja compartir una): sin secreto, solo el Client ID y un token renovable.
 
-use crate::api::{Api, Item, Kind};
+use crate::api::{clean, Api, Item, Kind};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -258,7 +258,7 @@ impl Spotify {
             .filter_map(|p| {
                 Some(Item {
                     kind: Kind::Playlist,
-                    title: p["name"].as_str()?.to_string(),
+                    title: clean(p["name"].as_str()?),
                     artist: String::new(),
                     album: String::new(),
                     duration: String::new(),
@@ -288,7 +288,7 @@ impl Spotify {
                 let a = &x["album"];
                 Some(Item {
                     kind: Kind::Album,
-                    title: a["name"].as_str()?.to_string(),
+                    title: clean(a["name"].as_str()?),
                     artist: artists(a),
                     album: String::new(),
                     duration: String::new(),
@@ -311,7 +311,7 @@ impl Spotify {
 }
 
 fn artists(v: &Value) -> String {
-    v["artists"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str()).collect::<Vec<_>>().join(", ")
+    clean(&v["artists"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str()).collect::<Vec<_>>().join(", "))
 }
 
 fn image(album: &Value) -> String {
@@ -327,9 +327,9 @@ fn track(t: &Value, album: Option<&Value>) -> Option<Item> {
     let ms = t["duration_ms"].as_u64().unwrap_or(0) / 1000;
     Some(Item {
         kind: Kind::Song,
-        title: t["name"].as_str()?.to_string(),
+        title: clean(t["name"].as_str()?),
         artist: artists(t),
-        album: al["name"].as_str().unwrap_or("").to_string(),
+        album: clean(al["name"].as_str().unwrap_or("")),
         duration: if ms > 0 { format!("{}:{:02}", ms / 60, ms % 60) } else { String::new() },
         video_id: None,
         browse_id: Some(format!("sp:track:{}", t["id"].as_str()?)),
