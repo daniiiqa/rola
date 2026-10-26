@@ -173,6 +173,7 @@ pub struct Strings {
     pub sp_not_found: &'static str,
     pub sp_matching: &'static str,
     pub foot_spotify: &'static [(&'static str, &'static str)],
+    pub missing_deps: &'static str,
     pub offline_used: &'static str,
     pub set_offline: &'static str,
     pub info_similar: &'static str,
@@ -359,7 +360,7 @@ pub static ES: Strings = Strings {
         ("?", "ayuda"),
         ("q", "salir"),
     ],
-    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
+    cli_help: "rola — YouTube Music en la terminal\n\n  rola            abre la app\n  rola --login    conecta tu cuenta (desde tu navegador)\n  rola --version  la versión instalada\n  rola --waybar   lo que suena, para un módulo custom de waybar\n                  (--lyrics: la línea de la letra; --max N: largo)",
     login_intro: "Conectar tu cuenta de YouTube Music:
 
   1. Abre https://music.youtube.com con tu sesión iniciada.
@@ -464,6 +465,7 @@ pub static ES: Strings = Strings {
     info_similar: "Artistas parecidos",
     set_offline: "Sin conexión: guardar las que más pones (hasta…)",
     offline_used: "{} usados",
+    missing_deps: "A rola le falta {} para poder sonar.\n  En Arch: sudo pacman -S --needed {}\n  En Debian/Ubuntu: sudo apt install {}  (mejor un yt-dlp reciente: pipx install yt-dlp)",
     foot_spotify: &[("enter", "conectar"), ("^u", "borrar"), ("esc", "cerrar")],
 };
 
@@ -602,7 +604,7 @@ pub static EN: Strings = Strings {
         ("?", "help"),
         ("q", "quit"),
     ],
-    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app\n  rola --login    connect your account (from your browser)\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
+    cli_help: "rola — YouTube Music in the terminal\n\n  rola            open the app\n  rola --login    connect your account (from your browser)\n  rola --version  the installed version\n  rola --waybar   what's playing, for a waybar custom module\n                  (--lyrics: the lyric line; --max N: length)",
     login_intro: "Connect your YouTube Music account:
 
   1. Open https://music.youtube.com while signed in.
@@ -707,5 +709,6 @@ pub static EN: Strings = Strings {
     info_similar: "Similar artists",
     set_offline: "Offline: keep the songs you play most (up to…)",
     offline_used: "{} used",
+    missing_deps: "rola is missing {}, which it needs to play.\n  On Arch: sudo pacman -S --needed {}\n  On Debian/Ubuntu: sudo apt install {}  (a recent yt-dlp is better: pipx install yt-dlp)",
     foot_spotify: &[("enter", "connect"), ("^u", "clear"), ("esc", "close")],
 };

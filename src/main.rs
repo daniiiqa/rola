@@ -2620,6 +2620,13 @@ fn migrate() {
     }
 }
 
+/// Lo que tiene que estar instalado: sin mpv no suena nada, y sin yt-dlp ni
+/// se encuentran los streams ni se leen las cookies del navegador.
+fn missing_deps() -> Vec<&'static str> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    ["mpv", "yt-dlp"].into_iter().filter(|p| !std::env::split_paths(&path).any(|d| d.join(p).is_file())).collect()
+}
+
 fn main() {
     migrate();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -2632,6 +2639,17 @@ fn main() {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{}", Config::load().lang.s().cli_help);
         return;
+    }
+    if args.iter().any(|a| a == "-V" || a == "--version") {
+        println!("rola {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let missing = missing_deps();
+    if !missing.is_empty() {
+        let msg = Config::load().lang.s().missing_deps;
+        let (list, cmd) = (missing.join(", "), missing.join(" "));
+        eprintln!("{}", msg.replacen("{}", &list, 1).replace("{}", &cmd));
+        std::process::exit(1);
     }
     let (tx, rx) = mpsc::channel();
     let term = ratatui::init();

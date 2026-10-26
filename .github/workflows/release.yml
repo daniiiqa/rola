@@ -1,0 +1,34 @@
+name: release
+
+# al subir un tag v0.3.0 (o el que sea): compila rola y lo deja en una release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: la versión del tag tiene que ser la de Cargo.toml
+        run: |
+          want="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          [ "$want" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME, Cargo.toml $want"; exit 1; }
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: empaquetar
+        run: |
+          name="rola-$GITHUB_REF_NAME-x86_64-linux"
+          mkdir "$name"
+          cp target/release/rola README.md LICENSE "$name/"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" rola-*.tar.gz* --title "rola $GITHUB_REF_NAME" --generate-notes

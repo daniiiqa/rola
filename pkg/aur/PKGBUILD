@@ -1,0 +1,43 @@
+# Maintainer: daniiiqa
+pkgname=rola
+pkgver=0.2.0
+pkgrel=1
+pkgdesc='YouTube Music in the terminal: lyrics, Spotify playlists, Discord, waybar and more'
+arch=('x86_64' 'aarch64')
+url='https://github.com/daniiiqa/rola'
+license=('MIT')
+depends=('mpv' 'yt-dlp' 'gcc-libs' 'glibc')
+makedepends=('cargo')
+optdepends=(
+  'wl-clipboard: copy song links on Wayland'
+  'xclip: copy song links on X11'
+  'ttf-nerd-fonts-symbols: icons in buttons and badges'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/rola "$pkgdir/usr/bin/rola"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
