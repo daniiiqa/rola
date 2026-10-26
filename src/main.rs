@@ -96,6 +96,8 @@ pub enum Sleep {
 
 /// Lo que tarda en bajar el volumen antes de pararse.
 const SLEEP_FADE: f64 = 12.0;
+/// Con cuánto adelanto se abre el mpv del fundido, para que ya haya cargado.
+const XFADE_PREP: f64 = 4.0;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
@@ -203,7 +205,7 @@ struct App {
     lyrics_total: Cell<u16>,      // filas de la letra con tiempos (ya partidas al ancho)
     sleep: Sleep,
     desktop: Option<Sender<notif::Song>>, // avisos del escritorio
-    ghost: Option<std::process::Child>,   // el final de la anterior apagándose (fundido)
+    ghost: Option<mpv::Ghost>,            // el final de la anterior apagándose (fundido)
     xfaded: u64,                          // track_n de la que ya empezó a fundirse
     fade_in: Option<f64>,                 // la siguiente que se cargue entra subiendo en tantos s
     af_on: bool,                          // mpv tiene puesto el filtro de entrada
@@ -1305,8 +1307,9 @@ impl App {
                 "duration" if self.loaded => self.dur = data.as_f64(),
                 "pause" => {
                     self.paused = data.as_bool().unwrap_or(true);
-                    // en pausa, tampoco el final de la anterior
-                    if self.paused {
+                    // en pausa, tampoco el final de la anterior (el que espera
+                    // su momento ya está en pausa, se queda)
+                    if self.paused && self.ghost.as_ref().is_some_and(|g| g.live) {
                         self.kill_ghost();
                     }
                 }
@@ -2084,23 +2087,41 @@ impl App {
     // ── fundido entre canciones ──
     /// A `crossfade` s del final, si la siguiente ya tiene su enlace listo:
     /// un mpv aparte toca lo que queda de esta apagándose y el de siempre
-    /// pone la siguiente subiendo. Sin enlace listo, como siempre (sin hueco
-    /// de todas formas, porque arranca al momento).
+    /// pone la siguiente subiendo. Ese mpv se prepara `XFADE_PREP` s antes,
+    /// en pausa en el punto justo, y se suelta al llegar ahí; sin enlace
+    /// listo, como siempre (sin hueco de todas formas, porque arranca al momento).
     fn maybe_crossfade(&mut self) {
         let x = self.cfg.crossfade as f64;
-        if x == 0.0 || !self.playing() || !self.direct || self.xfaded == self.track_n {
+        // el de la anterior, aún apagándose: hasta que acabe, nada (el tick lo quita)
+        if x == 0.0 || !self.playing() || !self.direct || self.xfaded == self.track_n || self.ghost.as_ref().is_some_and(|g| g.live) {
             return;
         }
         // repetir una o «al acabar esta»: ahí no se pasa a otra
         if self.repeat == Repeat::One || self.sleep == Sleep::EndOfSong {
-            return;
+            return self.kill_ghost();
         }
         let (Some(pos), Some(dur), Some(qi)) = (self.pos, self.dur, self.qi) else { return };
-        if dur - pos > x || dur < x * 3.0 {
+        if dur < x * 3.0 {
             return;
         }
-        let Some(next) = self.queue.get(qi + 1).and_then(|n| n.video_id.clone()) else { return };
-        if !self.cached.contains(&next) && !self.streams.get(&next).is_some_and(|l| l.fresh() && l.wait().is_zero()) {
+        let next = self.queue.get(qi + 1).and_then(|n| n.video_id.clone());
+        let next_ready = next.as_ref().is_some_and(|n| self.cached.contains(n) || self.streams.get(n).is_some_and(|l| l.fresh() && l.wait().is_zero()));
+        if let Some(g) = &mut self.ghost {
+            // se movió hacia atrás o pasó de largo (un salto), o cambió la cola
+            if pos < g.at - XFADE_PREP - 1.0 || pos > g.at + 0.5 || !next_ready {
+                return self.kill_ghost();
+            }
+            // un pelín antes: lo que tarda en llegarle la orden
+            if pos >= g.at - 0.03 {
+                g.go(self.volume);
+                self.xfaded = self.track_n;
+                self.fade_in = Some(dur - g.at);
+                self.play_index(qi + 1);
+            }
+            return;
+        }
+        let at = dur - x;
+        if pos >= at || pos < at - XFADE_PREP || !next_ready {
             return;
         }
         let Some(cur) = self.current().and_then(|c| c.video_id.clone()) else { return };
@@ -2112,19 +2133,11 @@ impl App {
                 None => return,
             },
         };
-        self.xfaded = self.track_n;
-        let left = dur - pos;
-        self.kill_ghost();
-        self.ghost = mpv::ghost(&url, pos, left, self.volume, self.cfg.sound.filter());
-        self.fade_in = Some(left);
-        self.play_index(qi + 1);
+        self.ghost = mpv::Ghost::prepare(&url, at, x, self.volume, self.cfg.sound.filter());
     }
 
     fn kill_ghost(&mut self) {
-        if let Some(mut g) = self.ghost.take() {
-            let _ = g.kill();
-            let _ = g.wait();
-        }
+        self.ghost = None;
     }
 
     // ── sonido ──
@@ -2435,7 +2448,7 @@ impl App {
             self.saved_at = Instant::now();
         }
         // el final de la anterior que ya acabó solo
-        if self.ghost.as_mut().is_some_and(|g| g.try_wait().is_ok_and(|e| e.is_some())) {
+        if self.ghost.as_mut().is_some_and(|g| g.done()) {
             self.ghost = None;
         }
         if self.note.as_ref().is_some_and(|n| n.2.elapsed() > Duration::from_secs(self.cfg.notify_secs)) {

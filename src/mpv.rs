@@ -122,28 +122,76 @@ impl Mpv {
     }
 }
 
-/// Un mpv suelto que toca el final de la que se va, apagándose en `secs`:
-/// la mitad del fundido (la otra es la siguiente entrando en el de siempre).
-pub fn ghost(url: &str, from: f64, secs: f64, volume: i64, sound: Option<&str>) -> Option<Child> {
-    let mut cmd = Command::new("mpv");
-    cmd.args(["--no-video", "--no-terminal", "--force-window=no", "--load-scripts=no"])
-        .arg(format!("--start={from:.2}"))
-        .arg(format!("--length={:.2}", secs + 0.3))
-        .arg(format!("--volume={volume}"))
-        // afade cuenta en tiempo de la canción, que con --start empieza en `from`
-        // con el mismo sonido que el de siempre (graves, voces…) delante
-        .arg(format!("--af=lavfi=[{}afade=t=out:st={from:.2}:d={secs:.2}]", sound.map(|g| format!("{g},")).unwrap_or_default()))
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
+/// Un mpv suelto que toca el final de la que se va, apagándose: la mitad del
+/// fundido (la otra es la siguiente entrando en el de siempre). Se abre unos
+/// segundos antes, en pausa y ya en `at`, con el audio cargado: si arrancara
+/// justo al cambiar, tardaría en conectar y se oiría un hueco y un salto atrás.
+pub struct Ghost {
+    child: Child,
+    sock: Option<UnixStream>,
+    path: PathBuf,
+    pub at: f64,    // segundo de la canción en que empieza el fundido
+    pub live: bool, // ya sonando (antes: esperando en pausa)
+}
+
+impl Ghost {
+    pub fn prepare(url: &str, at: f64, secs: f64, volume: i64, sound: Option<&str>) -> Option<Ghost> {
+        let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+        let path = PathBuf::from(dir).join(format!("rola-ghost-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut cmd = Command::new("mpv");
+        cmd.args(["--no-video", "--no-terminal", "--force-window=no", "--load-scripts=no", "--pause"])
+            .arg(format!("--input-ipc-server={}", path.display()))
+            .arg(format!("--start={at:.2}"))
+            .arg(format!("--length={:.2}", secs + 0.3))
+            .arg(format!("--volume={volume}"))
+            // afade cuenta en tiempo de la canción, que con --start empieza en `at`
+            // con el mismo sonido que el de siempre (graves, voces…) delante
+            .arg(format!("--af=lavfi=[{}afade=t=out:st={at:.2}:d={secs:.2}]", sound.map(|g| format!("{g},")).unwrap_or_default()))
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+        let child = cmd.spawn().ok()?;
+        Some(Ghost { child, sock: None, path, at, live: false })
     }
-    cmd.spawn().ok()
+
+    /// Que suene ya, con el volumen de ahora (pudo cambiar mientras esperaba).
+    pub fn go(&mut self, volume: i64) {
+        // el socket ya está desde hace segundos; si no, se le da un momento
+        for _ in 0..25 {
+            if self.sock.is_some() {
+                break;
+            }
+            self.sock = UnixStream::connect(&self.path).ok();
+            if self.sock.is_none() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        if let Some(s) = &mut self.sock {
+            let _ = writeln!(s, "{}", json!({ "command": ["set_property", "volume", volume] }));
+            let _ = writeln!(s, "{}", json!({ "command": ["set_property", "pause", false] }));
+        }
+        self.live = true;
+    }
+
+    pub fn done(&mut self) -> bool {
+        self.child.try_wait().is_ok_and(|e| e.is_some())
+    }
+}
+
+impl Drop for Ghost {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 impl Drop for Mpv {
