@@ -60,7 +60,8 @@ pub enum Ev {
     SpotifyIn(Result<String, String>),
     ScrobbleIn(Result<(String, String), String>),
     Party(party::Req), // lo que piden desde la página de la fiesta
-    RetryHome,         // el inicio falló al arrancar: otra vez // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
+    RetryHome,         // el inicio falló al arrancar: otra vez
+    Info { vid: String, res: Result<api::SongInfo, String> }, // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
@@ -115,6 +116,8 @@ pub enum Popup {
     AddTo { item: Item, state: ListState },
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    /// la ficha de una canción (i); sin info aún, cargando
+    Info { item: Item, info: Option<Box<api::SongInfo>>, err: Option<String>, state: ListState },
     /// Discord: el Application ID que se va pegando
     Discord { input: String, err: Option<String> },
     /// modo fiesta: el QR y el enlace
@@ -1150,6 +1153,9 @@ impl App {
             if matches!(popup, Popup::Discord { .. }) {
                 return self.discord_key(k);
             }
+            if matches!(popup, Popup::Info { .. }) {
+                return self.info_key(k);
+            }
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
@@ -1344,6 +1350,16 @@ impl App {
                             });
                         }
                         self.notify(format!("{title}: {e}"), true)
+                    }
+                }
+            }
+            Ev::Info { vid, res } => {
+                if let Some(Popup::Info { item, info, err, .. }) = &mut self.popup {
+                    if item.video_id.as_deref() == Some(vid.as_str()) {
+                        match res {
+                            Ok(i) => *info = Some(Box::new(i)),
+                            Err(e) => *err = Some(e),
+                        }
                     }
                 }
             }
@@ -1598,6 +1614,7 @@ impl App {
             KeyCode::Char('e') => self.cycle_sound(),
             KeyCode::Char('Y') => self.copy_link(),
             KeyCode::Char('W') => self.open_wrapped(),
+            KeyCode::Char('i') => self.open_info(),
             KeyCode::Char('F') => self.party_key(),
             _ => {}
         }
@@ -1745,6 +1762,58 @@ impl App {
         match k.code {
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => *period = (*period + 1) % 3,
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => *period = (*period + 2) % 3,
+            _ => self.popup = None,
+        }
+    }
+
+    // ── ficha de la canción ──
+    fn open_info(&mut self) {
+        let Some(item) = self.target() else { return };
+        let Some(vid) = item.video_id.clone() else { return };
+        self.popup = Some(Popup::Info { item, info: None, err: None, state: ListState::default().with_selected(Some(0)) });
+        let (api, tx) = (self.api.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let res = api.song_info(&vid);
+            let _ = tx.send(Ev::Info { vid, res });
+        });
+    }
+
+    /// Lo que se puede elegir en la ficha, en orden: 5 del artista, 5
+    /// parecidas, 5 artistas.
+    pub fn info_rows(info: &api::SongInfo) -> Vec<&Item> {
+        info.more.iter().take(5).chain(info.also.iter().take(5)).chain(info.similar.iter().take(5)).collect()
+    }
+
+    fn info_key(&mut self, k: KeyEvent) {
+        let Some(Popup::Info { info, state, .. }) = &mut self.popup else { return };
+        let rows: Vec<Item> = info.as_ref().map(|i| App::info_rows(i).into_iter().cloned().collect()).unwrap_or_default();
+        let i = state.selected().unwrap_or(0);
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => state.select(Some((i + 1).min(rows.len().saturating_sub(1)))),
+            KeyCode::Char('k') | KeyCode::Up => state.select(Some(i.saturating_sub(1))),
+            KeyCode::Enter => {
+                let Some(it) = rows.get(i).cloned() else { return };
+                self.popup = None;
+                match (it.kind, it.browse_id.clone()) {
+                    (Kind::Artist, Some(id)) => self.open(&it.title, Load::Artist(id), false),
+                    _ => self.start_radio(it),
+                }
+            }
+            KeyCode::Char('z') => {
+                let Some(it) = rows.get(i).filter(|x| x.playable()).cloned() else { return };
+                match self.qi {
+                    None => {
+                        self.queue = vec![it];
+                        self.play_index(0);
+                    }
+                    Some(qi) => {
+                        self.added += 1;
+                        let at = (qi + self.added).min(self.queue.len());
+                        self.notify(fill(self.s().queued, &[&it.title]), false);
+                        self.queue.insert(at, it);
+                    }
+                }
+            }
             _ => self.popup = None,
         }
     }

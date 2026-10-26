@@ -150,6 +150,21 @@ impl Auth {
     }
 }
 
+/// Lo que se sabe de una canción (i): de dónde es, cuánto se ha puesto y
+/// por dónde seguir.
+#[derive(Clone, Default)]
+pub struct SongInfo {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub year: String,
+    pub plays: Option<u64>,
+    pub secs: Option<u64>,
+    pub more: Vec<Item>,    // más del mismo artista
+    pub also: Vec<Item>,    // te puede gustar
+    pub similar: Vec<Item>, // artistas parecidos
+}
+
 /// La portada cuadrada, como en YouTube Music: sin las franjas negras de
 /// hqdefault (4:3 alrededor de un 16:9) y recortando el centro.
 pub fn square(img: image::DynamicImage) -> image::DynamicImage {
@@ -460,6 +475,56 @@ impl Api {
         Ok(Some((text, runs_text(&shelf["footer"]))))
     }
 
+    /// Ficha de una canción: artista, álbum y año (de `next`), reproducciones
+    /// (de `player`) y la pestaña «Relacionado»: más del artista, parecidas y
+    /// artistas parecidos.
+    pub fn song_info(&self, video_id: &str) -> Result<SongInfo, String> {
+        let next = self.post("next", json!({ "videoId": video_id, "isAudioOnly": true }))?;
+        let panel = find_key(&next, "playlistPanelVideoRenderer").ok_or("no info")?;
+        let mut info = SongInfo { title: runs_text(&panel["title"]), ..Default::default() };
+        // «Artista • Álbum • 2024»: el álbum es el que enlaza a uno (los videos
+        // traen «56M likes» ahí)
+        let byline = &panel["longBylineText"];
+        info.artist = runs_text(byline).split(" • ").next().unwrap_or("").to_string();
+        let mut artist_id = None;
+        for r in runs(byline) {
+            let text = r["text"].as_str().unwrap_or("");
+            match r["navigationEndpoint"]["browseEndpoint"]["browseId"].as_str() {
+                Some(id) if id.starts_with("MPRE") => info.album = text.to_string(),
+                Some(id) if id.starts_with("UC") && artist_id.is_none() => artist_id = Some(id.to_string()),
+                _ if text.len() == 4 && text.chars().all(|c| c.is_ascii_digit()) => info.year = text.to_string(),
+                _ => {}
+            }
+        }
+        if let Ok(p) = self.post("player", json!({ "videoId": video_id })) {
+            info.plays = p["videoDetails"]["viewCount"].as_str().and_then(|v| v.parse().ok());
+            info.secs = p["videoDetails"]["lengthSeconds"].as_str().and_then(|v| v.parse().ok());
+        }
+        if let Some(id) = find_browse_id(&next, "MPTR") {
+            let rel = self.browse(&id, 0).map(|x| x.0).unwrap_or(Value::Null);
+            let mut shelves = Vec::new();
+            collect(&rel, "musicCarouselShelfRenderer", &mut shelves);
+            for sh in shelves {
+                let title = runs_text(&sh["header"]["musicCarouselShelfBasicHeaderRenderer"]["title"]);
+                let items = parse_items(sh);
+                if items.iter().all(|x| x.kind == Kind::Artist) {
+                    info.similar.extend(items);
+                } else if info.also.is_empty() && !title.eq_ignore_ascii_case(&info.artist) && items.iter().any(|x| x.kind == Kind::Song) {
+                    info.also.extend(items.into_iter().filter(Item::playable));
+                }
+            }
+        }
+        // más del artista: sus canciones top, de su página
+        if let Some(id) = artist_id {
+            info.more = self.artist(&id).unwrap_or_default().into_iter().filter(|x| x.kind == Kind::Song && x.playable()).collect();
+        }
+        // ni la propia canción ni otra versión de ella
+        let me = Item { kind: Kind::Song, title: info.title.clone(), artist: info.artist.clone(), album: String::new(), duration: String::new(), video_id: Some(video_id.into()), browse_id: None, thumb: String::new() };
+        info.more.retain(|x| x.video_id.as_deref() != Some(video_id) && !x.same_song(&me));
+        info.also.retain(|x| x.video_id.as_deref() != Some(video_id) && !x.same_song(&me));
+        Ok(info)
+    }
+
     /// Mete una canción en una playlist propia (browseId con o sin VL).
     pub fn add_to_playlist(&self, playlist: &str, video_id: &str) -> Result<(), String> {
         let id = playlist.strip_prefix("VL").unwrap_or(playlist);
@@ -577,6 +642,23 @@ fn walk(v: &Value, out: &mut Vec<Item>) {
             }
         }
         Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+        _ => {}
+    }
+}
+
+/// Todos los valores bajo esa clave, a cualquier profundidad.
+fn collect<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m {
+                if k == key {
+                    out.push(x);
+                } else {
+                    collect(x, key, out);
+                }
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| collect(x, key, out)),
         _ => {}
     }
 }

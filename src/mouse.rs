@@ -146,7 +146,7 @@ impl App {
                 self.press(if b == MouseButton::Right { KeyCode::Left } else { KeyCode::Right });
             }
             Some(Popup::Settings { sel }) => *sel = i,
-            Some(Popup::AddTo { state, .. }) | Some(Popup::Login { state, .. }) => {
+            Some(Popup::AddTo { state, .. }) | Some(Popup::Login { state, .. }) | Some(Popup::Info { state, .. }) => {
                 state.select(Some(i));
                 self.press(KeyCode::Enter);
             }

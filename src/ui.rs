@@ -48,6 +48,16 @@ const ROCOLA: [&str; 22] = [
 ];
 const LOGO_ASCII: [&str; 4] = [" _ __ ___ | | __ _ ", "| '__/ _ \\| |/ _` |", "| | | (_) | | (_| |", "|_|  \\___/|_|\\__,_|"];
 
+/// 33451930 → «33.5M».
+fn compact(n: u64) -> String {
+    match n {
+        n if n >= 1_000_000_000 => format!("{:.1}B", n as f64 / 1e9),
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
+        n if n >= 10_000 => format!("{}K", n / 1000),
+        n => n.to_string(),
+    }
+}
+
 /// Parte `s` en filas de hasta `w` columnas, por palabras (y a la fuerza
 /// si una sola no cabe).
 fn wrap(s: &str, w: usize) -> Vec<String> {
@@ -320,6 +330,7 @@ impl App {
             Some(Popup::Scrobble { .. }) => self.draw_scrobble(f),
             Some(Popup::Party) => self.draw_party(f),
             Some(Popup::Discord { .. }) => self.draw_discord(f),
+            Some(Popup::Info { .. }) => self.draw_info(f),
             None => {}
         }
     }
@@ -937,6 +948,87 @@ impl App {
         f.render_widget(Paragraph::new(lines).block(block), area);
     }
 
+    /// La ficha: de quién, de qué disco y año, cuánto se ha puesto, y por
+    /// dónde seguir (elegible con j/k).
+    fn draw_info(&self, f: &mut Frame) {
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::Info { item, info, err, state }) = &self.popup else { return };
+        let w = 76.min(f.area().width.saturating_sub(4));
+        let muted = Style::new().fg(t.muted);
+        let n = item.title.chars().count().max(1);
+        let title: Vec<Span> =
+            item.title.chars().enumerate().map(|(i, c)| Span::styled(c.to_string(), Style::new().fg(self.gradient(i as f64 / n as f64)).bold())).collect();
+        let mut lines = vec![Line::from(title)];
+        let mut rows_at = Vec::new(); // línea de cada fila elegible
+        match (info, err) {
+            (_, Some(e)) => lines.push(Line::styled(fill(s.load_failed, &[e]), Style::new().fg(t.accent))),
+            (None, _) => lines.push(Line::styled(self.tx(s.loading), muted.italic())),
+            (Some(i), _) => {
+                let mut by = vec![i.artist.clone()];
+                if !i.album.is_empty() {
+                    by.push(i.album.clone());
+                }
+                if !i.year.is_empty() {
+                    by.push(i.year.clone());
+                }
+                if let Some(secs) = i.secs {
+                    by.push(format!("{}:{:02}", secs / 60, secs % 60));
+                }
+                lines.push(Line::styled(by.join("  ·  "), Style::new().fg(t.fg)));
+                if let Some(p) = i.plays {
+                    lines.push(Line::styled(fill(s.info_plays, &[&compact(p)]), Style::new().fg(t.accent)));
+                }
+                let sel = state.selected().unwrap_or(0);
+                let (hl, mark) = self.sel(true);
+                let mut k = 0;
+                let sections = [
+                    (fill(s.info_more, &[&i.artist]), i.more.iter().take(5).collect::<Vec<_>>()),
+                    (s.info_also.to_string(), i.also.iter().take(5).collect()),
+                    (s.info_similar.to_string(), i.similar.iter().take(5).collect()),
+                ];
+                for (head, items) in sections {
+                    if items.is_empty() {
+                        continue;
+                    }
+                    lines.push(Line::raw(""));
+                    lines.push(Line::styled(self.tx(&head), Style::new().fg(t.primary).bold()));
+                    for it in items {
+                        let on = k == sel;
+                        let lead = if on { mark } else { " " };
+                        let mut spans = vec![Span::styled(format!("{lead} "), Style::new().fg(t.primary)), Span::styled(it.title.clone(), Style::new().fg(t.fg))];
+                        if it.kind != crate::api::Kind::Artist && !it.artist.is_empty() {
+                            spans.push(Span::styled(format!("  ·  {}", it.artist), muted));
+                        }
+                        let mut line = Line::from(spans);
+                        if on {
+                            line = line.style(hl);
+                        }
+                        rows_at.push((lines.len(), k));
+                        lines.push(line);
+                        k += 1;
+                    }
+                }
+            }
+        }
+        let h = (lines.len() as u16 + 2).min(f.area().height.saturating_sub(2));
+        let area = self.popup_area(f, w, h);
+        let block = self.block(true).title(Line::styled(" i ", Style::new().fg(t.primary).bold())).padding(ratatui::widgets::Padding::horizontal(1));
+        let inner = block.inner(area);
+        // que la elegida se vea aunque no quepa todo
+        let sel_line = rows_at.iter().find(|(_, k)| Some(*k) == state.selected()).map_or(0, |x| x.0);
+        let scroll = (sel_line + 1).saturating_sub(inner.height as usize);
+        {
+            let mut hits = self.hits.borrow_mut();
+            hits.popup = area;
+            hits.popup_rows = rows_at
+                .iter()
+                .filter(|(l, _)| *l >= scroll && *l < scroll + inner.height as usize)
+                .map(|(l, k)| (inner.y + (l - scroll) as u16, *k))
+                .collect();
+        }
+        f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)).block(block), area);
+    }
+
     fn draw_discord(&self, f: &mut Frame) {
         let (t, s) = (self.theme, self.s());
         let Some(Popup::Discord { input, err }) = &self.popup else { return };
@@ -1319,6 +1411,7 @@ impl App {
             (Some(Popup::Scrobble { .. }), _) => s.foot_spotify,
             (Some(Popup::Party), _) => s.foot_party,
             (Some(Popup::Discord { .. }), _) => s.foot_spotify,
+            (Some(Popup::Info { .. }), _) => s.foot_info,
             (None, Focus::Search) => s.foot_search,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
@@ -1336,6 +1429,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_numbers() {
+        assert_eq!(compact(33_451_930), "33.5M");
+        assert_eq!(compact(9_155_430_009), "9.2B");
+        assert_eq!(compact(45_210), "45K");
+        assert_eq!(compact(812), "812");
+    }
 
     #[test]
     fn wraps_by_words() {
