@@ -2674,7 +2674,18 @@ fn main() {
     let term = ratatui::init();
     // pregunta a la terminal qué protocolo de imágenes habla (kitty, sixel…);
     // tiene que ir antes de que el hilo de teclas empiece a leer stdin
+    let asked = Instant::now();
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+    // si la terminal no contestó en su segundo (tmux sin pantalla, ssh lento…),
+    // el hilo de la pregunta sigue leyendo stdin y se come las teclas: espera la
+    // respuesta a un ESC[5n, que contesta cualquiera (tmux por su cuenta), así
+    // que se le pide otra y se le da un momento para irse
+    if asked.elapsed() >= Duration::from_millis(900) {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[5n").and_then(|_| out.flush());
+        std::thread::sleep(Duration::from_millis(250));
+    }
     let app = match App::new(tx.clone(), picker) {
         Ok(a) => a,
         Err(e) => {
