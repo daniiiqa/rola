@@ -60,6 +60,7 @@ pub enum Ev {
     LfmWaiting,                               // Last.fm: abierto el navegador, a que lo autorices
     LfmIn(Result<lastfm::Session, String>),
     Opened { vid: String, res: Result<Vec<Item>, String> }, // `rola play …`: la canción y su radio
+    Roulette { from: String, res: Result<Vec<Item>, String> }, // x: lo de la playlist que tocó
     Removed { playlist: String, video_id: String, title: String, res: Result<(), String> },
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
@@ -1699,6 +1700,16 @@ impl App {
                 self.play_index(0);
                 self.notify(fill(self.s().radio_of, &[&title]), false);
             }
+            Ev::Roulette { from, res } => match res {
+                Ok(items) if !items.is_empty() => {
+                    let i = (self.rand() % items.len() as u64) as usize;
+                    let it = items[i].clone();
+                    self.start_radio(it.clone());
+                    self.notify(fill(self.s().roulette_hit, &[&it.title, &from]), false);
+                }
+                Ok(_) => self.notify(fill(self.s().roulette_empty, &[&from]), true),
+                Err(e) => self.notify(format!("{from}: {e}"), true),
+            },
             Ev::Notify(m, err) => self.notify(m, err),
             Ev::Stream { vid, format, link } => {
                 self.fetching.remove(&vid);
@@ -1901,6 +1912,7 @@ impl App {
             KeyCode::Char('W') => self.open_wrapped(),
             KeyCode::Char('i') => self.open_info(),
             KeyCode::Char('F') => self.party_key(),
+            KeyCode::Char('x') => self.roulette(),
             _ => {}
         }
     }
@@ -2726,6 +2738,25 @@ impl App {
         std::thread::spawn(move || match api.library_playlists() {
             Ok(p) => drop(tx.send(Ev::Playlists(p))),
             Err(e) => drop(tx.send(Ev::Notify(format!("playlists: {}", api_err(s, &e)), true))),
+        });
+    }
+
+    /// x: una playlist tuya al azar (me gusta incluida) y de ella, una canción
+    /// al azar, con su radio. Solo su primera página: una o dos peticiones.
+    fn roulette(&mut self) {
+        if !self.api.authed() {
+            return self.notify(self.s().need_account, true);
+        }
+        let pls: Vec<Item> = self.playlists.iter().filter(|p| p.browse_id.is_some()).cloned().collect();
+        if pls.is_empty() {
+            return;
+        }
+        let pl = pls[(self.rand() % pls.len() as u64) as usize].clone();
+        self.notify(fill(self.s().roulette_spin, &[&pl.title]), false);
+        let (api, tx) = (self.api.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let res = api.playlist_page(pl.browse_id.as_deref().unwrap_or(""));
+            let _ = tx.send(Ev::Roulette { from: pl.title, res });
         });
     }
 

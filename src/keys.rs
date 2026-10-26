@@ -42,6 +42,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("copy_link", "Y"),
     ("wrapped", "W"),
     ("party", "F"),
+    ("roulette", "x"),
     ("settings", "o"),
     ("help", "?"),
     ("down", "j"),

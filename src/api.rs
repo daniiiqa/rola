@@ -431,6 +431,12 @@ impl Api {
         self.browse_account("FEmusic_library_corpus_track_artists", 10)
     }
 
+    /// Solo la primera página (unas 100): para la ruleta basta.
+    pub fn playlist_page(&self, id: &str) -> Result<Vec<Item>, String> {
+        let (_, items) = self.browse(id, 0)?;
+        Ok(items.into_iter().filter(|i| i.playable()).collect())
+    }
+
     pub fn playlist(&self, id: &str) -> Result<Vec<Item>, String> {
         let (_, items) = self.browse(id, 40)?;
         Ok(items.into_iter().filter(|i| i.playable()).collect())
