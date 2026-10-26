@@ -873,14 +873,24 @@ impl App {
 
     fn draw_login(&self, f: &mut Frame) {
         let (t, s) = (self.theme, self.s());
-        let Some(Popup::Login { browsers, state, busy, err }) = &self.popup else { return };
-        let sel = state.selected().unwrap_or(0);
+        let Some(Popup::Login { browsers, state, busy, err, accounts }) = &self.popup else { return };
         let (hl, mark) = self.sel(true);
-        let mut names: Vec<String> = browsers.iter().map(|b| b.name.to_string()).collect();
-        if self.api.authed() {
-            names.push(self.tx(s.logout));
-        }
-        let mut lines = vec![Line::styled(self.tx(s.login_pick), Style::new().fg(t.muted)), Line::raw("")];
+        // con varias cuentas en el navegador, se elige una; si no, el navegador
+        let (sel, names, pick) = match accounts {
+            Some(c) => (
+                c.sel,
+                c.accounts.iter().map(|a| format!("{}  {}", a.name, a.handle)).collect::<Vec<_>>(),
+                fill(s.login_pick_account_in, &[&c.browser]),
+            ),
+            None => {
+                let mut names: Vec<String> = browsers.iter().map(|b| b.name.to_string()).collect();
+                if self.api.authed() {
+                    names.push(self.tx(s.logout));
+                }
+                (state.selected().unwrap_or(0), names, s.login_pick.to_string())
+            }
+        };
+        let mut lines = vec![Line::styled(self.tx(&pick), Style::new().fg(t.muted)), Line::raw("")];
         let first = lines.len();
         for (i, n) in names.iter().enumerate() {
             lines.push(if i == sel {

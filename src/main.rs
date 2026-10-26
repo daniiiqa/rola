@@ -52,6 +52,7 @@ pub enum Ev {
     End(bool),
     Loaded { seq: u64, title: String, reset: bool, radio: bool, playlist: Option<String>, res: Result<Vec<Item>, String> },
     Created(Result<(String, usize), String>), // playlist nueva: nombre y canciones
+    Accounts(Choosing),                       // varias cuentas en el navegador: a elegir
     Removed { playlist: String, video_id: String, title: String, res: Result<(), String> },
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
@@ -123,7 +124,7 @@ pub enum Popup {
     Settings { sel: usize },
     AddTo { item: Item, state: ListState, naming: Option<(String, bool)> }, // nombre de la nueva; con toda la cola
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
-    Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
+    Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String>, accounts: Option<Choosing> },
     /// la ficha de una canción (i); sin info aún, cargando
     Info { item: Item, info: Option<Box<api::SongInfo>>, err: Option<String>, state: ListState },
     /// Discord: el Application ID que se va pegando
@@ -167,6 +168,14 @@ struct View {
     state: TableState,
     filter: Option<(String, Vec<Item>)>, // lo escrito con `f` y la lista entera
     playlist: Option<String>,            // browseId, si es una playlist (para quitar de ella)
+}
+
+/// Conectando desde un navegador con varias cuentas de Google.
+pub struct Choosing {
+    pub auth: Value,
+    pub accounts: Vec<api::Account>,
+    pub browser: String,
+    pub sel: usize,
 }
 
 /// Para filtrar: sin mayúsculas ni acentos («cancion» encuentra «Canción»).
@@ -480,14 +489,33 @@ impl App {
             return self.notify(self.s().login_none, true);
         }
         let state = ListState::default().with_selected(Some(0));
-        self.popup = Some(Popup::Login { browsers, state, busy: None, err: None });
+        self.popup = Some(Popup::Login { browsers, state, busy: None, err: None, accounts: None });
     }
 
     fn login_key(&mut self, k: KeyEvent) {
         let authed = self.api.authed();
-        let Some(Popup::Login { browsers, state, busy, err }) = &mut self.popup else { return };
+        let Some(Popup::Login { browsers, state, busy, err, accounts }) = &mut self.popup else { return };
         if busy.is_some() {
             return; // leyendo; enseguida acaba
+        }
+        // varias cuentas en ese navegador: cuál
+        if let Some(c) = accounts {
+            let (n, i) = (c.accounts.len(), c.sel);
+            match k.code {
+                KeyCode::Esc | KeyCode::Char('q') => *accounts = None,
+                KeyCode::Char('j') | KeyCode::Down => c.sel = (i + 1).min(n - 1),
+                KeyCode::Char('k') | KeyCode::Up => c.sel = i.saturating_sub(1),
+                KeyCode::Enter => {
+                    let mut auth = c.auth.clone();
+                    let a = c.accounts[i].clone();
+                    let browser = c.browser.clone();
+                    login::pick(&mut auth, &a);
+                    let res = login::save(&data_dir().join("auth.json"), &auth).map(|_| format!("{} ({browser})", a.name));
+                    let _ = self.tx.send(Ev::LoggedIn(res));
+                }
+                _ => {}
+            }
+            return;
         }
         let n = browsers.len() + authed as usize; // la última fila: cerrar sesión
         let i = state.selected().unwrap_or(0);
@@ -504,11 +532,15 @@ impl App {
                     *err = None;
                     let (tx, file, s) = (self.tx.clone(), data_dir().join("auth.json"), self.s());
                     std::thread::spawn(move || {
-                        let res = login::import(&b.arg)
-                            .and_then(|v| login::save(&file, &v))
-                            .map(|_| b.name.to_string())
-                            .map_err(|e| if e.is_empty() { fill(s.login_no_session, &[b.name]) } else { e });
-                        let _ = tx.send(Ev::LoggedIn(res));
+                        let why = |e: String| if e.is_empty() { fill(s.login_no_session, &[b.name]) } else { e };
+                        let ev = match login::import(&b.arg) {
+                            Ok((auth, accounts)) if accounts.len() > 1 => Ev::Accounts(Choosing { auth, accounts, browser: b.name.to_string(), sel: 0 }),
+                            Ok((auth, accounts)) => Ev::LoggedIn(
+                                login::save(&file, &auth).map(|_| format!("{} ({})", accounts.first().map_or("", |a| a.name.as_str()), b.name)),
+                            ),
+                            Err(e) => Ev::LoggedIn(Err(why(e))),
+                        };
+                        let _ = tx.send(ev);
                     });
                 }
                 None if authed => {
@@ -524,12 +556,16 @@ impl App {
         }
     }
 
-    /// Cómo sale la cuenta en los ajustes.
+    /// Cómo sale la cuenta en los ajustes: de quién (si se sabe) y de dónde.
     pub fn account_name(&self) -> String {
-        let who = match (self.api.authed(), self.api.browser()) {
+        let from = match (self.api.authed(), self.api.browser()) {
             (false, _) => None,
             (true, Some(b)) => Some(login::name_of(&b)),
             (true, None) => Some(self.s().account_pasted.to_string()),
+        };
+        let who = match (self.api.account(), from) {
+            (Some(n), Some(f)) => Some(format!("{n} ({f})")),
+            (_, f) => f,
         };
         settings::linked(self.s(), who)
     }
@@ -1599,6 +1635,12 @@ impl App {
                     }
                 } else if let (Some(l), true) = (&link, self.upgrade.as_ref() == Some(&vid)) {
                     self.upgrade_when_ready(vid, l);
+                }
+            }
+            Ev::Accounts(c) => {
+                if let Some(Popup::Login { busy, accounts, .. }) = &mut self.popup {
+                    *busy = None;
+                    *accounts = Some(c);
                 }
             }
             Ev::LoggedIn(res) => match res {
@@ -2792,7 +2834,15 @@ fn login() {
     let file = data_dir().join("auth.json");
     for b in login::browsers() {
         println!("{}", fill(s.login_cli_try, &[b.name]));
-        match login::import(&b.arg).and_then(|v| login::save(&file, &v)) {
+        let picked = login::import(&b.arg).map(|(mut auth, accounts)| {
+            if accounts.len() > 1 {
+                if let Some(a) = ask_account(s, &accounts) {
+                    login::pick(&mut auth, a);
+                }
+            }
+            auth
+        });
+        match picked.and_then(|v| login::save(&file, &v)) {
             Ok(()) => return login_test(&file),
             Err(e) if e.is_empty() => println!("  {}", fill(s.login_no_session, &[b.name])),
             Err(e) => println!("  {e}"),
@@ -2811,6 +2861,20 @@ fn login() {
         std::process::exit(1);
     }
     login_test(&file);
+}
+
+/// Con varias cuentas en el navegador, cuál (por número; Enter: la primera).
+fn ask_account<'a>(s: &Strings, accounts: &'a [api::Account]) -> Option<&'a api::Account> {
+    println!("  {}", s.login_pick_account);
+    for (i, a) in accounts.iter().enumerate() {
+        println!("    {}) {}  {}", i + 1, a.name, a.handle);
+    }
+    print!("  > ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    let n = line.trim().parse::<usize>().unwrap_or(1);
+    accounts.get(n.saturating_sub(1)).or(accounts.first())
 }
 
 /// Prueba la sesión recién guardada pidiendo las playlists.

@@ -2,6 +2,7 @@
 //! leer (y descifrar) las cookies de casi todos, así que rola se las pide a él
 //! y se queda solo con las de youtube.com. Nada de herramientas de desarrollador.
 
+use crate::api::Account;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -79,10 +80,11 @@ pub fn name_of(arg: &str) -> String {
         .unwrap_or_else(|| arg.to_string())
 }
 
-/// Las cookies de youtube.com de ese navegador, como cabecera `Cookie`.
-/// Err con un motivo legible si yt-dlp no pudo; vacío si no hay sesión
-/// (comprobado con YouTube, no solo que haya cookies).
-pub fn import(arg: &str) -> Result<Value, String> {
+/// Las cookies de youtube.com de ese navegador, ya con la primera cuenta que
+/// tenga sesión, y todas las que hay (para elegir si son varias). Err con un
+/// motivo legible si yt-dlp no pudo; vacío si no hay sesión (comprobado con
+/// YouTube, no solo que haya cookies).
+pub fn import(arg: &str) -> Result<(Value, Vec<Account>), String> {
     // yt-dlp vuelca el tarro entero (todas las webs): a un archivo solo
     // nuestro, del que se lee lo de YouTube y se borra al momento
     let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
@@ -111,13 +113,18 @@ pub fn import(arg: &str) -> Result<Value, String> {
         let why = err.lines().find(|l| l.contains("ERROR") && !l.contains("URL")).unwrap_or("").trim().to_string();
         return Err(why);
     }
-    let auth = json!({ "cookie": cookie, "authuser": "0", "browser": arg });
-    // hay cookies de YouTube, pero ¿con sesión? (Err vacío: que no)
-    match crate::api::Api::new(Path::new("")).check(&auth) {
-        Ok(true) => Ok(auth),
-        Ok(false) => Err(String::new()),
-        Err(e) => Err(e),
-    }
+    let mut auth = json!({ "cookie": cookie, "authuser": "0", "browser": arg });
+    // hay cookies de YouTube, pero ¿con sesión, y de quién? (Err vacío: de nadie)
+    let accounts = crate::api::Api::new(Path::new("")).accounts(&auth);
+    let first = accounts.first().ok_or_else(String::new)?;
+    pick(&mut auth, first);
+    Ok((auth, accounts))
+}
+
+/// La sesión pasa a ser la de esa cuenta.
+pub fn pick(auth: &mut Value, a: &Account) {
+    auth["authuser"] = json!(a.authuser);
+    auth["name"] = json!(a.name);
 }
 
 /// De un cookies.txt (formato Netscape), las de youtube.com como `a=b; c=d`.

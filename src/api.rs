@@ -143,7 +143,20 @@ struct Auth {
     authuser: String,
     sapisid: String,
     browser: Option<String>, // de dónde salió, para renovarla sola
+    name: Option<String>,    // de quién es (con varias cuentas en el navegador)
 }
+
+/// Una cuenta de Google con sesión en el navegador. `authuser` es su número
+/// ahí, que no va seguido: con sesiones cerradas puede ser 0 y 3.
+#[derive(Clone, Debug)]
+pub struct Account {
+    pub authuser: String,
+    pub name: String,
+    pub handle: String,
+}
+
+/// Hasta qué `authuser` se mira (Google deja tener unas cuantas a la vez).
+const AUTHUSERS: u32 = 8;
 
 impl Auth {
     fn from_json(v: &Value) -> Option<Auth> {
@@ -158,7 +171,8 @@ impl Auth {
             .join("; ");
         let sapisid = sapisid_of(&cookie)?;
         let authuser = v["authuser"].as_str().unwrap_or("0").to_string();
-        Some(Auth { cookie, authuser, sapisid, browser: v["browser"].as_str().map(String::from) })
+        let name = v["name"].as_str().map(String::from);
+        Some(Auth { cookie, authuser, sapisid, browser: v["browser"].as_str().map(String::from), name })
     }
 }
 
@@ -224,11 +238,29 @@ impl Api {
         api
     }
 
-    /// ¿YouTube da por buena esta sesión? (sin guardarla ni renovarla)
-    pub fn check(&self, auth: &Value) -> Result<bool, String> {
-        let Some(a) = Auth::from_json(auth) else { return Ok(false) };
-        let v = self.send("browse", json!({ "browseId": "FEmusic_home" }), Some(&a)).map_err(|(_, e)| e)?;
-        Ok(!logged_out(&v))
+    /// Las cuentas con sesión en esas cookies, de la primera a la última
+    /// (vacío: ninguna). Se pregunta por todos los `authuser` a la vez.
+    pub fn accounts(&self, auth: &Value) -> Vec<Account> {
+        let Some(base) = Auth::from_json(auth) else { return Vec::new() };
+        std::thread::scope(|s| {
+            let hs: Vec<_> = (0..AUTHUSERS)
+                .map(|n| {
+                    let a = Auth { authuser: n.to_string(), cookie: base.cookie.clone(), sapisid: base.sapisid.clone(), browser: None, name: None };
+                    s.spawn(move || {
+                        let v = self.send("account/account_menu", json!({}), Some(&a)).ok().filter(|v| !logged_out(v))?;
+                        let h = find_key(&v, "activeAccountHeaderRenderer")?;
+                        let name = runs_text(&h["accountName"]);
+                        (!name.is_empty()).then(|| Account { authuser: a.authuser, name, handle: runs_text(&h["channelHandle"]) })
+                    })
+                })
+                .collect();
+            hs.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
+        })
+    }
+
+    /// De quién es la sesión, si se sabe.
+    pub fn account(&self) -> Option<String> {
+        self.current().and_then(|a| a.name.clone())
     }
 
     /// Vuelve a leer auth.json (tras entrar o salir desde la app).
@@ -266,7 +298,11 @@ impl Api {
         }
         *last = Some(Instant::now());
         let Some(b) = &old.browser else { return false };
-        let Ok(v) = crate::login::import(b) else { return false };
+        // la misma cuenta que se eligió, no la primera del navegador
+        let Ok((mut v, accounts)) = crate::login::import(b) else { return false };
+        if let Some(a) = accounts.iter().find(|a| a.authuser == old.authuser) {
+            crate::login::pick(&mut v, a);
+        }
         if crate::login::save(&self.file, &v).is_err() {
             return false;
         }

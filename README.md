@@ -38,7 +38,8 @@ abrir rola, elige el navegador (o `o` → Cuenta, o `rola --login`). Firefox, Ze
 LibreWolf, Floorp, Waterfox, Chrome, Chromium, Brave, Vivaldi, Edge y Opera;
 las cookies las lee yt-dlp, rola se queda solo con las de youtube.com en
 `~/.local/share/rola/auth.json` (0600) y, si caducan, las vuelve a tomar del
-mismo navegador. Si no hay manera, `rola --login` deja pegar los encabezados a
+mismo navegador. Si en ese navegador hay varias cuentas de Google, pregunta con
+cuál (y al renovarla se queda con esa). Si no hay manera, `rola --login` deja pegar los encabezados a
 mano. Sin cuenta funcionan búsqueda e inicio.
 
 La portada de lo que suena sale al pie de la barra lateral: en kitty (o
