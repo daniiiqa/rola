@@ -11,10 +11,25 @@ interna de YouTube Music, sin runtime ni librerías de Python.
 
 ## Instalar
 
+En Arch, desde el AUR:
+
+```bash
+yay -S rola        # o paru -S rola; trae mpv y yt-dlp
+```
+
+En cualquier Linux x86_64 hay un binario listo en las
+[releases](https://github.com/daniiiqa/rola/releases) (hace falta tener mpv y
+yt-dlp). O compilado a mano:
+
 ```bash
 sudo pacman -S --needed mpv yt-dlp
 cargo install --path . --root ~/.local --force   # deja ~/.local/bin/rola
 ```
+
+Una versión nueva sale subiendo un tag: `git tag v0.3.0 && git push --tags`
+(la de `Cargo.toml` tiene que coincidir); GitHub la compila y la publica sola.
+Luego, en `pkg/aur/`, se sube `pkgver`, se pone el `sha256sums` nuevo
+(`updpkgsums`), `makepkg --printsrcinfo > .SRCINFO` y se sube al AUR.
 
 Tu cuenta (me gusta, historial, playlists, álbumes, artistas) se conecta con
 la sesión que ya tienes en el navegador: entra en music.youtube.com allí y, al

@@ -8,6 +8,8 @@ url='https://github.com/daniiiqa/rola'
 license=('MIT')
 depends=('mpv' 'yt-dlp' 'gcc-libs' 'glibc')
 makedepends=('cargo')
+# el LTO de gcc de makepkg rompe el C de ring al enlazar; el de Rust ya va en Cargo.toml
+options=('!lto')
 optdepends=(
   'wl-clipboard: copy song links on Wayland'
   'xclip: copy song links on X11'
