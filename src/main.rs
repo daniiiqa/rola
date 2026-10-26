@@ -4,6 +4,7 @@
 //!     rola --login    conecta tu cuenta (biblioteca, playlists, me gusta)
 
 mod api;
+mod bar;
 mod config;
 mod discord;
 mod hypr;
@@ -209,6 +210,7 @@ struct App {
     party: Option<party::Party>,          // modo fiesta encendido
     rpc: Option<Sender<discord::Presence>>, // el estado de Discord
     rpc_last: (u64, discord::Presence),     // lo último mandado (con su track_n)
+    bar_last: Value,                        // lo último escrito para la barra
     lb: Option<(String, Sender<scrobble::Job>)>, // ListenBrainz: usuario y su hilo
     popup: Option<Popup>,
     picker: Picker,
@@ -335,6 +337,7 @@ impl App {
             party: None,
             rpc: None,
             rpc_last: (0, None),
+            bar_last: Value::Null,
             lb: scrobble::load(&data_dir().join("listenbrainz.json")).map(|(tok, user)| (user, scrobble::start(tok))),
             popup: None,
             picker,
@@ -1822,6 +1825,51 @@ impl App {
         }
     }
 
+    // ── barra (waybar) ──
+    /// Lo que suena, para `rola --waybar` (solo si cambió; la posición, al segundo).
+    fn bar_sync(&mut self) {
+        let Some(it) = self.current() else {
+            if !self.bar_last.is_null() {
+                bar::clear();
+                self.bar_last = Value::Null;
+            }
+            return;
+        };
+        let lyric = match &self.lyrics {
+            Some((_, Lyrics::Synced(lines, _))) => {
+                let pos = self.pos.unwrap_or(0.0) + 0.2;
+                lines.iter().rev().find(|(at, _)| *at <= pos).map(|(_, l)| l.clone())
+            }
+            _ => None,
+        };
+        let sleep = match (self.sleep, self.sleep_left()) {
+            (Sleep::Off, _) => None,
+            (_, Some(m)) => Some(format!("{m} min")),
+            _ => Some(self.s().sleep_end.to_string()),
+        };
+        let color = match self.theme.primary {
+            Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+            _ => None,
+        };
+        let v = json!({
+            "pid": std::process::id(),
+            "title": it.title,
+            "artist": it.artist,
+            "album": it.album,
+            "playing": self.playing(),
+            "pos": self.pos.map(f64::floor),
+            "dur": self.dur.map(f64::floor),
+            "lyric": lyric,
+            "sleep": sleep,
+            "party": self.party.is_some(),
+            "color": color,
+        });
+        if v != self.bar_last {
+            bar::write(&v);
+            self.bar_last = v;
+        }
+    }
+
     // ── Discord ──
     /// Lo que debe verse en Discord, si ha cambiado (canción, pausa, salto).
     fn discord_sync(&mut self) {
@@ -2419,6 +2467,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
         }
         app.mpris_sync();
         app.discord_sync();
+        app.bar_sync();
         if last_tick.elapsed() >= Duration::from_millis(500) {
             urgent |= app.tick();
             last_tick = Instant::now();
@@ -2436,6 +2485,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
     ratatui::restore();
     app.log_play();
     app.save_state();
+    bar::clear();
     app.save_matches();
     res
 }
@@ -2491,6 +2541,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--login") {
         return login();
+    }
+    if args.iter().any(|a| a == "--waybar") {
+        return bar::waybar(&args);
     }
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{}", Config::load().lang.s().cli_help);

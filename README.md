@@ -118,6 +118,21 @@ YouTube Music, en texto plano. A LRCLIB solo se le manda título y artista.
 Y si no hay letra por ningún lado, una rocola: luces que corren por el arco,
 burbujas en los tubos y el disco girando, al ritmo de la canción.
 
+## Waybar
+
+`rola --waybar` da lo que suena para un módulo custom: la canción en el color
+de la portada (con `--lyrics`, la línea de la letra que suena), y en el tooltip
+el disco, el tiempo, el temporizador y la fiesta. Sin rola abierta, se oculta.
+
+```jsonc
+"custom/rola": {
+    "exec": "rola --waybar --lyrics --max 40",
+    "return-type": "json",
+    "escape": false,
+    "on-click": "playerctl -p rola play-pause"
+}
+```
+
 ## Discord
 
 `o` → Discord: lo que suena sale en tu estado («Escuchando una rola»), con la
