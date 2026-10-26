@@ -519,11 +519,14 @@ impl App {
         self.rng
     }
 
-    fn shuffle_vec(&mut self, v: &mut [Item]) {
+    /// Al azar, pero sin el mismo artista dos veces seguidas (contando con
+    /// `prev`, la que suena antes de estas).
+    fn shuffle_vec(&mut self, v: &mut [Item], prev: Option<&Item>) {
         for i in (1..v.len()).rev() {
             let j = (self.rand() % (i as u64 + 1)) as usize;
             v.swap(i, j);
         }
+        spread(v, prev);
     }
 
     // ── barra lateral ──
@@ -696,7 +699,7 @@ impl App {
         self.radio_pending = None;
         if self.shuffle {
             let first = items.remove(start);
-            self.shuffle_vec(&mut items);
+            self.shuffle_vec(&mut items, Some(&first));
             items.insert(0, first);
             self.queue = items;
             self.play_index(0);
@@ -1656,7 +1659,8 @@ impl App {
         self.shuffle = on;
         if let (true, Some(qi)) = (self.shuffle, self.qi) {
             let mut rest = self.queue.split_off(qi + 1);
-            self.shuffle_vec(&mut rest);
+            let cur = self.queue.get(qi).cloned();
+            self.shuffle_vec(&mut rest, cur.as_ref());
             self.queue.extend(rest);
             self.added = 0;
         }
@@ -2343,6 +2347,33 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
+/// El artista principal (el primero de «A, B & C»), para comparar.
+fn main_artist(it: &Item) -> String {
+    it.artist.split([',', '&']).next().unwrap_or("").trim().to_lowercase()
+}
+
+/// Separa las del mismo artista: si una sigue a otra suya, se cambia por la
+/// más cercana de otro (que tampoco choque con la de después). Si no hay
+/// manera (todo es del mismo), se queda como está.
+fn spread(v: &mut [Item], prev: Option<&Item>) {
+    for i in 0..v.len() {
+        let before = if i == 0 { prev.map(main_artist) } else { Some(main_artist(&v[i - 1])) };
+        let Some(before) = before.filter(|b| !b.is_empty()) else { continue };
+        if main_artist(&v[i]) != before {
+            continue;
+        }
+        let next = v.get(i + 1).map(main_artist);
+        let fits = |x: &Item| {
+            let a = main_artist(x);
+            a != before && Some(&a) != next.as_ref()
+        };
+        let pick = (i + 1..v.len()).find(|&j| fits(&v[j])).or_else(|| (i + 1..v.len()).find(|&j| main_artist(&v[j]) != before));
+        if let Some(j) = pick {
+            v.swap(i, j);
+        }
+    }
+}
+
 fn unix_now() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -2501,6 +2532,23 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn spread_artists() {
+        let it = |a: &str| Item { kind: Kind::Song, title: String::new(), artist: a.into(), album: String::new(), duration: String::new(), video_id: None, browse_id: None, thumb: String::new() };
+        let mut v: Vec<Item> = ["A", "A, X", "A", "B", "C", "B", "D"].iter().map(|a| it(a)).collect();
+        spread(&mut v, Some(&it("A")));
+        let names: Vec<String> = v.iter().map(main_artist).collect();
+        assert!(names[0] != "a", "{names:?}");
+        assert!(names.windows(2).all(|w| w[0] != w[1]), "{names:?}");
+        assert_eq!(names.len(), 7);
+        // todo del mismo: se queda tal cual
+        let mut same: Vec<Item> = ["A", "A"].iter().map(|a| it(a)).collect();
+        spread(&mut same, None);
+        assert_eq!(same.len(), 2);
+    }
+
     #[test]
     fn base64() {
         assert_eq!(super::base64(b""), "");
