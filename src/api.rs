@@ -311,12 +311,20 @@ impl Api {
     }
 
     fn post(&self, endpoint: &str, body: Value) -> Result<Value, String> {
+        self.post_with(endpoint, body, true)
+    }
+
+    /// `retry`: una vez más si YouTube da un error pasajero. Las partes de la
+    /// búsqueda no: si una falla, mejor enseñar ya lo de las otras.
+    fn post_with(&self, endpoint: &str, body: Value, retry: bool) -> Result<Value, String> {
         let auth = self.current();
         let res = self.send(endpoint, body.clone(), auth.as_deref());
-        // sesión caducada: si vino de un navegador, se renueva y otra vez
+        // sesión caducada: si vino de un navegador, se renueva y otra vez. Eso es
+        // cuando YouTube contesta como a un invitado, o un 401; un 403 suelto no
+        // (lo da a veces a una sola búsqueda), y renovar cuesta: leer el navegador
         let stale = match &res {
             Ok(v) => logged_out(v),
-            Err((code, _)) => matches!(code, Some(401 | 403)),
+            Err((code, _)) => *code == Some(401),
         };
         let res = match &auth {
             Some(a) if stale && a.browser.is_some() && self.renew(a) => self.send(endpoint, body.clone(), self.current().as_deref()),
@@ -325,7 +333,7 @@ impl Api {
         // YouTube a veces dice que no un rato (403 sueltos, 429, 5xx) y al
         // segundo sí: una vez más antes de enseñar el error
         match res {
-            Err((Some(code), _)) if transient(code) => {
+            Err((Some(code), _)) if retry && transient(code) => {
                 std::thread::sleep(RETRY_AFTER);
                 self.send(endpoint, body, self.current().as_deref()).map_err(|(_, e)| e)
             }
@@ -415,6 +423,10 @@ impl Api {
         self.browse_account("FEmusic_liked_albums", 10)
     }
 
+    pub fn library_podcasts(&self) -> Result<Vec<Item>, String> {
+        self.browse_account("FEmusic_library_non_music_audio_list", 10)
+    }
+
     pub fn library_artists(&self) -> Result<Vec<Item>, String> {
         self.browse_account("FEmusic_library_corpus_track_artists", 10)
     }
@@ -463,20 +475,24 @@ impl Api {
     }
 
     /// La búsqueda sin filtro viene con artistas mal etiquetados; por tipo sale
-    /// bien, así que se piden cuatro en paralelo.
+    /// bien, así que se piden cuatro en paralelo (cinco con «podcast»).
     pub fn search(&self, q: &str) -> Result<Vec<Item>, String> {
-        let filters: [(&str, usize); 4] = [
+        let mut filters: Vec<(&str, usize)> = vec![
             ("EgWKAQIgAWoMEA4QChADEAQQCRAF", 2),           // artists
             ("EgWKAQIIAWoMEA4QChADEAQQCRAF", 25),          // songs
             ("EgWKAQIYAWoMEA4QChADEAQQCRAF", 6),           // albums
             ("Eg-KAQwIABAAGAAgACgBMABqChAEEAMQCRAFEAo%3D", 6), // playlists
         ];
+        // podcasts solo si se piden («podcast …»): si no, se cuelan en todo
+        if q.to_lowercase().contains("podcast") {
+            filters.insert(0, ("EgWKAQJQAWoMEA4QChADEAQQCRAF", 6));
+        }
         let results: Vec<Result<Vec<Item>, String>> = std::thread::scope(|s| {
             let hs: Vec<_> = filters
                 .iter()
                 .map(|(p, n)| {
                     s.spawn(move || {
-                        let v = self.post("search", json!({ "query": q, "params": p }))?;
+                        let v = self.post_with("search", json!({ "query": q, "params": p }), false)?;
                         let mut items = parse_items(&v);
                         items.retain(|i| i.playable() || i.browse_id.is_some());
                         items.truncate(*n);
@@ -733,6 +749,7 @@ fn walk(v: &Value, out: &mut Vec<Item>) {
                 let it = match k.as_str() {
                     "musicResponsiveListItemRenderer" => parse_row(val),
                     "musicTwoRowItemRenderer" => parse_card(val),
+                    "musicMultiRowListItemRenderer" => parse_episode(val),
                     "playlistPanelVideoRenderer" => parse_panel(val),
                     // con cuenta, la radio trae cada canción dos veces: la
                     // canción y su videoclip; una sola, mejor la canción (con álbum)
@@ -852,7 +869,8 @@ fn page_type(nav: &Value) -> Option<(&str, &str)> {
 
 fn kind_of_page(pt: &str) -> Option<Kind> {
     match pt {
-        "MUSIC_PAGE_TYPE_ALBUM" | "MUSIC_PAGE_TYPE_AUDIOBOOK" => Some(Kind::Album),
+        // un podcast se abre como un álbum: su lista de episodios
+        "MUSIC_PAGE_TYPE_ALBUM" | "MUSIC_PAGE_TYPE_AUDIOBOOK" | "MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE" => Some(Kind::Album),
         "MUSIC_PAGE_TYPE_ARTIST" | "MUSIC_PAGE_TYPE_USER_CHANNEL" | "MUSIC_PAGE_TYPE_LIBRARY_ARTIST" => {
             Some(Kind::Artist)
         }
@@ -992,6 +1010,41 @@ fn parse_card_bare(r: &Value) -> Option<Item> {
     Some(finish(Kind::Playlist, title, meta, None, Some(pl.to_string())))
 }
 
+/// Un episodio de podcast (en la página del programa).
+fn parse_episode(r: &Value) -> Option<Item> {
+    let vid = r["onTap"]["watchEndpoint"]["videoId"].as_str()?;
+    let dur = runs(&r["playbackProgress"]["musicPlaybackProgressRenderer"]["durationText"])
+        .iter()
+        .filter_map(|x| x["text"].as_str())
+        .find_map(spoken_duration)
+        .unwrap_or_default();
+    let meta = Meta { duration: dur, ..Meta::default() };
+    let it = finish(Kind::Video, runs_text(&r["title"]), meta, Some(vid.to_string()), None);
+    Some(Item { thumb: thumb_of(&r["thumbnail"]), ..it })
+}
+
+/// «1 hr 24 min», «45 min», «30 sec» → «1:24:00», «45:00», «0:30».
+fn spoken_duration(s: &str) -> Option<String> {
+    let mut secs = 0u64;
+    let mut seen = false;
+    let words: Vec<&str> = s.split_whitespace().collect();
+    for w in words.windows(2) {
+        let Ok(n) = w[0].parse::<u64>() else { continue };
+        let k = match w[1].trim_end_matches(['s', '.', ',']) {
+            "hr" | "hour" | "h" => 3600,
+            "min" | "minute" | "m" => 60,
+            "sec" | "second" => 1,
+            _ => continue,
+        };
+        secs += n * k;
+        seen = true;
+    }
+    seen.then(|| match secs / 3600 {
+        0 => format!("{}:{:02}", secs / 60, secs % 60),
+        h => format!("{h}:{:02}:{:02}", secs / 60 % 60, secs % 60),
+    })
+}
+
 fn parse_panel(r: &Value) -> Option<Item> {
     parse_panel_bare(r).map(|it| Item { thumb: thumb_of(&r["thumbnail"]), ..it })
 }
@@ -1129,6 +1182,15 @@ mod tests {
     fn retries_only_transient() {
         assert!([403, 429, 500, 503].iter().all(|&c| transient(c)));
         assert!(![400, 401, 404].iter().any(|&c| transient(c)));
+    }
+
+    #[test]
+    fn spoken_durations() {
+        assert_eq!(spoken_duration(" • 1 hr 24 min").as_deref(), Some("1:24:00"));
+        assert_eq!(spoken_duration("45 min").as_deref(), Some("45:00"));
+        assert_eq!(spoken_duration("2 hours 5 minutes 7 seconds").as_deref(), Some("2:05:07"));
+        assert_eq!(spoken_duration("30 sec").as_deref(), Some("0:30"));
+        assert_eq!(spoken_duration(" • "), None);
     }
 
     #[test]

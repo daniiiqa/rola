@@ -141,6 +141,13 @@ Sin secretos: solo el Client ID y un token que se renueva solo
 (`~/.local/share/rola/spotify.json`, 0600). La API ya no da el contenido de
 playlists que no son tuyas (ni colaborativas), así que esas no salen.
 
+## Podcasts
+
+Los que guardas en YouTube Music están en «Podcasts» (barra lateral); un
+programa se abre como un álbum, con sus episodios. Para buscarlos, que la
+búsqueda diga «podcast» («podcast la cotorrisa»): si no, no se piden, para que
+no se cuelen entre la música ni cueste una petición más cada búsqueda.
+
 ## Radio
 
 Como en YT Music: `Enter` en una canción del inicio o de una búsqueda pone esa
@@ -211,7 +218,6 @@ rola apunta cada canción que oyes al menos 30 s en
 va a tu perfil («sonando ahora» y cada canción oída a la mitad, o 4 minutos).
 Sin conexión, se reintenta luego. El token queda en
 `~/.local/share/rola/listenbrainz.json` (0600).
-
 
 ## Last.fm
 

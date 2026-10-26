@@ -87,6 +87,7 @@ enum Side {
     History,
     Albums,
     Artists,
+    Podcasts,
     Queue,
     Sep,
     Hint,
@@ -163,6 +164,7 @@ enum Load {
     History,
     Albums,
     Artists,
+    Podcasts,
     Playlist(String),
     Album(String),
     Artist(String),
@@ -649,6 +651,7 @@ impl App {
             s.push((t.history.into(), Side::History));
             s.push((t.albums.into(), Side::Albums));
             s.push((t.artists.into(), Side::Artists));
+            s.push((t.podcasts.into(), Side::Podcasts));
         }
         s.push((t.queue.into(), Side::Queue));
         if !playlists.is_empty() {
@@ -705,6 +708,7 @@ impl App {
             Side::History => self.open(&title, Load::History, true),
             Side::Albums => self.open(&title, Load::Albums, true),
             Side::Artists => self.open(&title, Load::Artists, true),
+            Side::Podcasts => self.open(&title, Load::Podcasts, true),
             Side::Playlist(pid) => self.open(&title, Load::Playlist(pid), true),
             Side::SpLiked => self.open(&format!("Spotify › {title}"), Load::SpLiked, true),
             Side::SpAlbums => self.open(&format!("Spotify › {title}"), Load::SpAlbums, true),
@@ -743,6 +747,7 @@ impl App {
                 Load::History => api.history(),
                 Load::Albums => api.library_albums(),
                 Load::Artists => api.library_artists(),
+                Load::Podcasts => api.library_podcasts(),
                 Load::Playlist(id) => api.playlist(&id),
                 Load::Album(id) => api.album(&id),
                 Load::Artist(id) => api.artist(&id),

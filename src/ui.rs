@@ -1228,6 +1228,7 @@ impl App {
                         Side::History => self.ic("\u{f02da}  ", ""),
                         Side::Albums => self.ic("\u{f0025}  ", ""),
                         Side::Artists => self.ic("\u{f0004}  ", ""),
+                        Side::Podcasts => self.ic("\u{f0994}  ", ""),
                         Side::Queue => self.ic("\u{f0cb8}  ", ""),
                         _ => "",
                     };

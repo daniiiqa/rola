@@ -59,6 +59,7 @@ pub struct Strings {
     pub history: &'static str,
     pub albums: &'static str,
     pub artists: &'static str,
+    pub podcasts: &'static str,
     pub queue: &'static str,
     pub no_account_hint: &'static str,
     // paneles
@@ -257,6 +258,7 @@ pub static ES: Strings = Strings {
     history: "Historial",
     albums: "Álbumes",
     artists: "Artistas",
+    podcasts: "Podcasts",
     queue: "Cola",
     no_account_hint: "sin cuenta: o → Cuenta",
     search_placeholder: "buscar en rola  ( / )",
@@ -534,6 +536,7 @@ pub static EN: Strings = Strings {
     history: "History",
     albums: "Albums",
     artists: "Artists",
+    podcasts: "Podcasts",
     queue: "Queue",
     no_account_hint: "no account: o → Account",
     search_placeholder: "search rola  ( / )",
