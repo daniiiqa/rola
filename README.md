@@ -11,10 +11,11 @@ interna de YouTube Music, sin runtime ni librerías de Python.
 
 ## Instalar
 
-En Arch, desde el AUR:
+En Arch, con el PKGBUILD del repo (pronto en el AUR):
 
 ```bash
-yay -S rola        # o paru -S rola; trae mpv y yt-dlp
+git clone https://github.com/daniiiqa/rola && cd rola/pkg/aur
+makepkg -si        # trae mpv y yt-dlp
 ```
 
 En cualquier Linux x86_64 hay un binario listo en las
