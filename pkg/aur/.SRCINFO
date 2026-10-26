@@ -1,6 +1,6 @@
 pkgbase = rola
 	pkgdesc = YouTube Music in the terminal: lyrics, Spotify playlists, Discord, waybar and more
-	pkgver = 0.2.1
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/daniiiqa/rola
 	arch = x86_64
@@ -15,7 +15,7 @@ pkgbase = rola
 	optdepends = xclip: copy song links on X11
 	optdepends = ttf-nerd-fonts-symbols: icons in buttons and badges
 	options = !lto
-	source = rola-0.2.1.tar.gz::https://github.com/daniiiqa/rola/archive/refs/tags/v0.2.1.tar.gz
-	sha256sums = aa501fad89b16ffa1d9f42137acd8a77b8bbbd967d6e8508124ea43c933242dd
+	source = rola-0.3.0.tar.gz::https://github.com/daniiiqa/rola/archive/refs/tags/v0.3.0.tar.gz
+	sha256sums = c59a3760bbdfcecf950468bd6f1350fba2e917f4ec4ef701e42449d73fdc5e85
 
 pkgname = rola

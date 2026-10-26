@@ -1,6 +1,6 @@
 # Maintainer: daniiiqa
 pkgname=rola
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='YouTube Music in the terminal: lyrics, Spotify playlists, Discord, waybar and more'
 arch=('x86_64' 'aarch64')
@@ -16,7 +16,7 @@ optdepends=(
   'ttf-nerd-fonts-symbols: icons in buttons and badges'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('aa501fad89b16ffa1d9f42137acd8a77b8bbbd967d6e8508124ea43c933242dd')
+sha256sums=('c59a3760bbdfcecf950468bd6f1350fba2e917f4ec4ef701e42449d73fdc5e85')
 
 prepare() {
   cd "$pkgname-$pkgver"
