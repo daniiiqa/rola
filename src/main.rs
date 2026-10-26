@@ -59,7 +59,8 @@ pub enum Ev {
     LoggedIn(Result<String, String>), // nombre del navegador, o por qué no
     SpotifyIn(Result<String, String>),
     ScrobbleIn(Result<(String, String), String>),
-    Party(party::Req), // lo que piden desde la página de la fiesta // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
+    Party(party::Req), // lo que piden desde la página de la fiesta
+    RetryHome,         // el inicio falló al arrancar: otra vez // (token, usuario) de ListenBrainz, o por qué no           // usuario de Spotify, o por qué no
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
@@ -234,6 +235,10 @@ struct App {
     spotify: Option<spotify::Spotify>,
     sp_playlists: Vec<Item>,
     sp_match: HashMap<String, Option<String>>, // canción de Spotify → video_id (None: no está)
+    sp_dirty: bool,                            // hay emparejamientos sin guardar
+    home_retried: bool,
+    sp_saved: Instant,
+    saved_at: Instant,                         // última vez que se guardó la sesión
     matcher: Arc<(Mutex<VecDeque<Item>>, Condvar)>, // las que faltan por buscar en YouTube Music
     matching: HashSet<String>,
     sp_wait: Option<String>, // la que toca sonar, esperando a que se encuentre
@@ -363,6 +368,10 @@ impl App {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
+            sp_dirty: false,
+            home_retried: false,
+            sp_saved: Instant::now(),
+            saved_at: Instant::now(),
             matcher: Arc::default(),
             matching: HashSet::new(),
             sp_wait: None,
@@ -870,6 +879,7 @@ impl App {
     fn matched(&mut self, sp: String, vid: Option<String>) {
         self.matching.remove(&sp);
         self.sp_match.insert(sp.clone(), vid.clone());
+        self.sp_dirty = true;
         for v in self.views.iter_mut() {
             for it in v.items.iter_mut().filter(|x| x.sp_track() == Some(&sp)) {
                 it.video_id = vid.clone();
@@ -1320,7 +1330,24 @@ impl App {
                         let state = TableState::default().with_selected(Some(0));
                         self.push(View { title, items, queue: false, radio, state });
                     }
-                    Err(e) => self.notify(format!("{title}: {e}"), true),
+                    Err(e) => {
+                        // al arrancar, sin nada en pantalla: un tropiezo de YouTube
+                        // no debería dejarlo vacío, se reintenta una vez
+                        if reset && self.views.is_empty() && !self.home_retried {
+                            self.home_retried = true;
+                            let tx = self.tx.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(Duration::from_secs(2));
+                                let _ = tx.send(Ev::RetryHome);
+                            });
+                        }
+                        self.notify(format!("{title}: {e}"), true)
+                    }
+                }
+            }
+            Ev::RetryHome => {
+                if self.views.is_empty() && self.loading.is_none() {
+                    self.open(self.s().home, Load::Home, true);
                 }
             }
             Ev::Playlists(p) => {
@@ -1637,6 +1664,20 @@ impl App {
 
     // ── lo escuchado ──
     /// Apunta la actual si se oyó lo bastante, y empieza la cuenta de nuevo.
+    /// Lo ya emparejado de Spotify con YouTube Music, para no volver a buscarlo.
+    fn save_matches(&mut self) {
+        if !self.sp_dirty {
+            return;
+        }
+        let file = data_dir().join("spotify-match.json");
+        let tmp = file.with_extension("json.tmp");
+        // por un temporal: un corte a medias no deja el archivo roto
+        if std::fs::write(&tmp, serde_json::to_string(&self.sp_match).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &file)).is_ok() {
+            self.sp_dirty = false;
+        }
+        self.sp_saved = Instant::now();
+    }
+
     fn log_play(&mut self) {
         let secs = std::mem::take(&mut self.listened);
         let Some(it) = self.current() else { return };
@@ -2152,6 +2193,15 @@ impl App {
         self.top_up_radio();
         self.prefetch_ahead();
         self.sleep_tick();
+        // a disco poco a poco: si rola muere a la mala, se pierde poco
+        if self.sp_dirty && (self.matching.is_empty() || self.sp_saved.elapsed() > Duration::from_secs(5)) {
+            self.save_matches();
+        }
+        if self.saved_at.elapsed() > Duration::from_secs(60) {
+            self.save_state();
+            self.save_matches();
+            self.saved_at = Instant::now();
+        }
         // el final de la anterior que ya acabó solo
         if self.ghost.as_mut().is_some_and(|g| g.try_wait().is_ok_and(|e| e.is_some())) {
             self.ghost = None;
@@ -2202,6 +2252,20 @@ fn unix_now() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// Cerrar la ventana de la terminal (SIGHUP) o un kill (SIGTERM, SIGINT):
+/// que rola salga como con q, guardando sesión y emparejamientos.
+static QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    QUIT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn catch_signals() {
+    for sig in [libc::SIGHUP, libc::SIGTERM, libc::SIGINT] {
+        unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
+    }
+}
+
 /// "3:45" / "1:02:03" → segundos.
 fn parse_duration(s: &str) -> Option<f64> {
     s.split(':').try_fold(0.0, |acc, p| p.parse::<f64>().ok().map(|n| acc * 60.0 + n))
@@ -2224,7 +2288,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break Ok(()),
         }
-        if app.quit {
+        if app.quit || QUIT.load(std::sync::atomic::Ordering::Relaxed) {
             break Ok(());
         }
         app.mpris_sync();
@@ -2246,9 +2310,7 @@ fn run(rx: Receiver<Ev>, mut app: App, mut term: ratatui::DefaultTerminal) -> st
     ratatui::restore();
     app.log_play();
     app.save_state();
-    if !app.sp_match.is_empty() {
-        let _ = std::fs::write(data_dir().join("spotify-match.json"), serde_json::to_string(&app.sp_match).unwrap_or_default());
-    }
+    app.save_matches();
     res
 }
 
@@ -2336,6 +2398,7 @@ fn main() {
             break;
         }
     });
+    catch_signals();
     if let Err(e) = run(rx, app, term) {
         eprintln!("rola: {e}");
     }
