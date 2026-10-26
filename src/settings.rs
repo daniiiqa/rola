@@ -18,6 +18,7 @@ pub enum Setting {
     Notify,
     Desktop,
     Crossfade,
+    Sound,
     CoverColors,
     Theme,
     Background,
@@ -63,7 +64,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Cover,
         ],
     ),
-    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Crossfade, Setting::Autoplay]),
+    (|s| s.sec_playback, &[Setting::Quality, Setting::VolStep, Setting::Seek, Setting::Crossfade, Setting::Sound, Setting::Autoplay]),
 ];
 
 pub fn all() -> impl Iterator<Item = Setting> {
@@ -100,6 +101,7 @@ impl Setting {
             Setting::VolStep => s.set_vol_step,
             Setting::Seek => s.set_seek,
             Setting::Crossfade => s.set_crossfade,
+            Setting::Sound => s.set_sound,
             Setting::Autoplay => s.set_autoplay,
         }
     }
@@ -129,6 +131,7 @@ impl Setting {
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
             Setting::Crossfade => "crossfade",
+            Setting::Sound => "sound",
             Setting::Account | Setting::Spotify | Setting::Scrobble | Setting::Discord | Setting::Cover | Setting::Autoplay => return None,
         })
     }
@@ -175,6 +178,7 @@ impl App {
             Setting::Seek => format!("{} s", c.seek),
             Setting::Crossfade if c.crossfade == 0 => yn(false),
             Setting::Crossfade => format!("{} s", c.crossfade),
+            Setting::Sound => s.sounds[idx(c.sound)].into(),
             Setting::Autoplay => yn(self.autoplay),
         }
     }
@@ -239,6 +243,10 @@ impl App {
             Setting::VolStep => c.vol_step = step_in(config::VOL_STEPS, c.vol_step, d),
             Setting::Seek => c.seek = step_in(config::SEEKS, c.seek, d),
             Setting::Crossfade => c.crossfade = step_in(config::CROSSFADES, c.crossfade, d),
+            Setting::Sound => {
+                c.sound = c.sound.step(d);
+                self.apply_sound();
+            }
             Setting::Autoplay => self.autoplay = !self.autoplay,
         }
         self.reload_theme();

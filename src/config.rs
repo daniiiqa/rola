@@ -75,6 +75,24 @@ choice!(Quality { Best => "best", Medium => "medium", Low => "low" });
 choice!(Labels { Icons => "icons", Short => "short", Words => "words" });
 // aviso del escritorio con cada canción: nunca, si no estás mirando rola, siempre
 choice!(Desktop { Off => "off", Away => "away", Always => "always" });
+// cómo suena: filtros de audio de mpv (ffmpeg)
+choice!(Sound { Normal => "normal", Bass => "bass", Vocals => "vocals", Night => "night", Even => "even" });
+
+impl Sound {
+    /// El filtro (lavfi) de cada uno; None, tal cual.
+    pub fn filter(self) -> Option<&'static str> {
+        match self {
+            Sound::Normal => None,
+            Sound::Bass => Some("bass=g=6:f=110"),
+            // la voz (2–4 kHz) un poco arriba, los graves un poco abajo
+            Sound::Vocals => Some("equalizer=f=3000:t=q:w=1.2:g=4,bass=g=-3"),
+            // comprime: lo fuerte baja, lo bajo sube (para la noche, con cascos)
+            Sound::Night => Some("acompressor=threshold=0.1:ratio=4:attack=20:release=250:makeup=2"),
+            // iguala el volumen entre canciones (y dentro, poco a poco)
+            Sound::Even => Some("dynaudnorm=f=200:g=11:p=0.9"),
+        }
+    }
+}
 // mayúsculas/minúsculas en los rótulos de la interfaz (no en títulos de canciones)
 choice!(Case { Normal => "normal", Upper => "upper", Lower => "lower" });
 // cómo se marca la fila elegida
@@ -156,6 +174,7 @@ pub struct Config {
     pub cover_colors: bool, // el color principal y el de acento, de la portada
     pub desktop: Desktop,
     pub crossfade: u64, // segundos; 0: sin fundido
+    pub sound: Sound,
     pub motion: bool, // ecualizador, títulos que se desplazan, aviso de canción nueva
     pub quality: Quality,
     pub vol_step: i64,
@@ -203,6 +222,7 @@ impl Default for Config {
             cover_colors: false,
             desktop: Desktop::Off,
             crossfade: 0,
+            sound: Sound::Normal,
             motion: true,
             quality: Quality::Best,
             vol_step: 5,
@@ -264,6 +284,7 @@ impl Config {
             cover_colors: v["cover_colors"].as_bool().unwrap_or(d.cover_colors),
             desktop: v["desktop"].as_str().and_then(Desktop::parse).unwrap_or(d.desktop),
             crossfade: v["crossfade"].as_u64().unwrap_or(d.crossfade).min(30),
+            sound: pick(&v["sound"], d.sound),
             motion: v["motion"].as_bool().unwrap_or(d.motion),
             quality: pick(&v["quality"], d.quality),
             vol_step: num("vol_step", d.vol_step as u64, 1, 25) as i64,
@@ -299,6 +320,7 @@ impl Config {
             "cover_colors": self.cover_colors,
             "desktop": self.desktop.key(),
             "crossfade": self.crossfade,
+            "sound": self.sound.key(),
             "motion": self.motion,
             "quality": self.quality.key(),
             "vol_step": self.vol_step,

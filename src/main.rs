@@ -25,7 +25,7 @@ mod theme;
 mod ui;
 
 use api::{Api, Item, Kind};
-use config::Config;
+use config::{Choice, Config};
 use i18n::{fill, Lang, Strings};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -397,6 +397,7 @@ impl App {
     }
 
     fn start(mut self) -> App {
+        self.apply_sound();
         self.load_account();
         // sin cuenta: ofrecer entrar desde el navegador (una vez; luego, en ajustes)
         if !self.api.authed() && !self.login_skipped && !login::browsers().is_empty() {
@@ -734,9 +735,10 @@ impl App {
             self.kill_ghost();
         }
         if fade.is_some() || self.af_on {
-            match fade {
-                Some(x) => self.mpv.cmd(json!(["af", "set", format!("lavfi=[afade=t=in:d={x:.2}]")])),
-                None => self.mpv.cmd(json!(["af", "clr", ""])),
+            // con etiqueta: el del sonido (@eq) se queda como está
+            self.mpv.cmd(json!(["af", "remove", "@fade"]));
+            if let Some(x) = fade {
+                self.mpv.cmd(json!(["af", "add", format!("@fade:lavfi=[afade=t=in:d={x:.2}]")]));
             }
             self.af_on = fade.is_some();
         }
@@ -1593,6 +1595,7 @@ impl App {
             }
             KeyCode::Char('L') => self.like(),
             KeyCode::Char('t') => self.cycle_sleep(),
+            KeyCode::Char('e') => self.cycle_sound(),
             KeyCode::Char('Y') => self.copy_link(),
             KeyCode::Char('W') => self.open_wrapped(),
             KeyCode::Char('F') => self.party_key(),
@@ -1906,7 +1909,7 @@ impl App {
         self.xfaded = self.track_n;
         let left = dur - pos;
         self.kill_ghost();
-        self.ghost = mpv::ghost(&link.url, pos, left, self.volume);
+        self.ghost = mpv::ghost(&link.url, pos, left, self.volume, self.cfg.sound.filter());
         self.fade_in = Some(left);
         self.play_index(qi + 1);
     }
@@ -1916,6 +1919,25 @@ impl App {
             let _ = g.kill();
             let _ = g.wait();
         }
+    }
+
+    // ── sonido ──
+    /// El filtro de sonido elegido, en mpv (con etiqueta, sin tocar el fundido).
+    pub fn apply_sound(&mut self) {
+        self.mpv.cmd(json!(["af", "remove", "@eq"]));
+        if let Some(g) = self.cfg.sound.filter() {
+            self.mpv.cmd(json!(["af", "add", format!("@eq:lavfi=[{g}]")]));
+        }
+    }
+
+    /// e: el siguiente sonido.
+    fn cycle_sound(&mut self) {
+        self.cfg.sound = self.cfg.sound.step(1);
+        self.apply_sound();
+        let _ = self.cfg.save();
+        self.cfg_mtimes = config::mtimes();
+        let name = self.s().sounds[config::Sound::ALL.iter().position(|x| *x == self.cfg.sound).unwrap_or(0)];
+        self.notify(fill(self.s().sound_now, &[name]), false);
     }
 
     // ── temporizador ──
@@ -2110,9 +2132,13 @@ impl App {
             self.mpv.cmd(json!(["set_property", "ytdl-format", new.quality.ytdl_format()]));
             self.streams.clear();
         }
+        let sound = new.sound != self.cfg.sound;
         self.cfg = new;
         if self.cfg.lang != old {
             self.retitle(old);
+        }
+        if sound {
+            self.apply_sound();
         }
         self.reload_theme();
     }
