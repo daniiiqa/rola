@@ -50,7 +50,9 @@ pub enum Ev {
     Resize,
     Prop(String, Value),
     End(bool),
-    Loaded { seq: u64, title: String, reset: bool, radio: bool, res: Result<Vec<Item>, String> },
+    Loaded { seq: u64, title: String, reset: bool, radio: bool, playlist: Option<String>, res: Result<Vec<Item>, String> },
+    Created(Result<(String, usize), String>), // playlist nueva: nombre y canciones
+    Removed { playlist: String, video_id: String, title: String, res: Result<(), String> },
     Playlists(Vec<Item>),
     Radio { seed: String, res: Result<Vec<Item>, String> },
     Lyrics { vid: String, lyrics: Lyrics },
@@ -119,7 +121,7 @@ pub enum Lyrics {
 pub enum Popup {
     Help,
     Settings { sel: usize },
-    AddTo { item: Item, state: ListState },
+    AddTo { item: Item, state: ListState, naming: Option<(String, bool)> }, // nombre de la nueva; con toda la cola
     /// navegadores de los que entrar; busy: leyendo uno; err: por qué no se pudo
     Login { browsers: Vec<login::Browser>, state: ListState, busy: Option<String>, err: Option<String> },
     /// la ficha de una canción (i); sin info aún, cargando
@@ -164,6 +166,7 @@ struct View {
     radio: bool, // Enter en una canción pone su radio (inicio, búsqueda), como en YT Music
     state: TableState,
     filter: Option<(String, Vec<Item>)>, // lo escrito con `f` y la lista entera
+    playlist: Option<String>,            // browseId, si es una playlist (para quitar de ella)
 }
 
 /// Para filtrar: sin mayúsculas ni acentos («cancion» encuentra «Canción»).
@@ -231,6 +234,7 @@ struct App {
     sleep: Sleep,
     desktop: Option<Sender<notif::Song>>, // avisos del escritorio
     ghost: Option<mpv::Ghost>,            // el final de la anterior apagándose (fundido)
+    confirm_remove: Option<(String, Instant)>, // d ya pulsada una vez en una playlist
     xfaded: u64,                          // track_n de la que ya empezó a fundirse
     fade_in: Option<f64>,                 // la siguiente que se cargue entra subiendo en tantos s
     af_on: bool,                          // mpv tiene puesto el filtro de entrada
@@ -362,6 +366,7 @@ impl App {
             sleep: Sleep::Off,
             desktop: None,
             ghost: None,
+            confirm_remove: None,
             xfaded: 0,
             fade_in: None,
             af_on: false,
@@ -647,7 +652,7 @@ impl App {
                 self.loading = None;
                 self.views.clear();
                 let sel = self.qi.unwrap_or(0);
-                self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)), filter: None });
+                self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)), filter: None, playlist: None });
             }
             Side::Sep | Side::Hint | Side::Head(_) => return,
         }
@@ -660,6 +665,10 @@ impl App {
         let (seq, api, tx, title) = (self.seq, self.api.clone(), self.tx.clone(), title.to_string());
         self.loading = Some(title.clone());
         let radio = matches!(load, Load::Home | Load::Search(_));
+        let playlist = match &load {
+            Load::Playlist(id) if !id.starts_with("sp:") => Some(id.clone()),
+            _ => None,
+        };
         let sp = self.spotify.clone();
         std::thread::spawn(move || {
             let spot = |f: &dyn Fn(&spotify::Spotify) -> Result<Vec<Item>, String>| sp.as_ref().map_or(Ok(Vec::new()), f);
@@ -678,7 +687,7 @@ impl App {
                 Load::Artist(id) => api.artist(&id),
                 Load::Search(q) => api.search(&q),
             };
-            let _ = tx.send(Ev::Loaded { seq, title, reset, radio, res });
+            let _ = tx.send(Ev::Loaded { seq, title, reset, radio, playlist, res });
         });
     }
 
@@ -1184,16 +1193,20 @@ impl App {
         if !self.api.authed() {
             return self.notify(self.s().need_account, true);
         }
-        if self.own_playlists().is_empty() {
-            return self.notify(self.s().no_playlists, true);
-        }
-        self.popup = Some(Popup::AddTo { item, state: ListState::default().with_selected(Some(0)) });
+        self.popup = Some(Popup::AddTo { item, state: ListState::default().with_selected(Some(0)), naming: None });
+    }
+
+    /// Lo que va arriba en «añadir a…»: playlist nueva, y con la cola si hay.
+    pub fn add_to_extra(&self) -> usize {
+        1 + usize::from(self.queue.len() > 1)
     }
 
     fn popup_key(&mut self, k: KeyEvent) {
-        let n = self.own_playlists().len();
+        let extra = self.add_to_extra();
+        let n = self.own_playlists().len() + extra;
+        let queue: Vec<String> = self.queue.iter().filter_map(|x| x.video_id.clone()).collect();
         let Some(popup) = &mut self.popup else { return };
-        let Popup::AddTo { item, state } = popup else {
+        let Popup::AddTo { item, state, naming } = popup else {
             if matches!(popup, Popup::Settings { .. }) {
                 return self.settings_key(k);
             }
@@ -1221,9 +1234,33 @@ impl App {
             self.popup = None; // la ayuda se cierra con cualquier tecla
             return;
         };
+        // escribiendo el nombre de la nueva
+        if let Some((name, whole)) = naming {
+            let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+            match k.code {
+                KeyCode::Esc => *naming = None,
+                KeyCode::Backspace => drop(name.pop()),
+                KeyCode::Char('u') if ctrl => name.clear(),
+                KeyCode::Char(c) if !ctrl => name.push(c),
+                KeyCode::Enter if !name.trim().is_empty() => {
+                    let name = name.trim().to_string();
+                    let ids = if *whole { queue } else { item.video_id.iter().cloned().collect() };
+                    self.popup = None;
+                    let (api, tx) = (self.api.clone(), self.tx.clone());
+                    std::thread::spawn(move || {
+                        let n = ids.len();
+                        let res = api.create_playlist(&name, &ids).map(|_| (name, n));
+                        let _ = tx.send(Ev::Created(res));
+                    });
+                }
+                _ => {}
+            }
+            return;
+        }
         let i = state.selected().unwrap_or(0);
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => self.popup = None,
+            KeyCode::Enter if i < extra => *naming = Some((String::new(), i == 1)),
             KeyCode::Char('j') | KeyCode::Down => state.select(Some((i + 1).min(n.saturating_sub(1)))),
             KeyCode::Char('k') | KeyCode::Up => state.select(Some(i.saturating_sub(1))),
             KeyCode::Char('g') | KeyCode::Home => state.select(Some(0)),
@@ -1231,7 +1268,7 @@ impl App {
             KeyCode::Enter => {
                 let item = item.clone();
                 self.popup = None;
-                let Some(pl) = self.own_playlists().into_iter().nth(i) else { return };
+                let Some(pl) = self.own_playlists().into_iter().nth(i - extra) else { return };
                 let (api, tx) = (self.api.clone(), self.tx.clone());
                 std::thread::spawn(move || {
                     let res = api.add_to_playlist(pl.browse_id.as_deref().unwrap_or(""), item.video_id.as_deref().unwrap_or(""));
@@ -1395,7 +1432,7 @@ impl App {
                 }
                 self.advance(true);
             }
-            Ev::Loaded { seq, title, reset, radio, res } => {
+            Ev::Loaded { seq, title, reset, radio, playlist, res } => {
                 if seq != self.seq {
                     return;
                 }
@@ -1408,7 +1445,7 @@ impl App {
                         let mut items = items;
                         self.resolve_spotify(&mut items);
                         let state = TableState::default().with_selected(Some(0));
-                        self.push(View { title, items, queue: false, radio, state, filter: None });
+                        self.push(View { title, items, queue: false, radio, state, filter: None, playlist });
                     }
                     Err(e) => {
                         // al arrancar, sin nada en pantalla: un tropiezo de YouTube
@@ -1450,6 +1487,32 @@ impl App {
                 self.playlists = p;
                 self.fill_side();
             }
+            Ev::Created(res) => {
+                match res {
+                    Ok((name, n)) => self.notify(fill(self.s().created, &[&name, &n.to_string()]), false),
+                    Err(e) => self.notify(e, true),
+                }
+                self.reload_playlists();
+            }
+            Ev::Removed { playlist, video_id, title, res } => match res {
+                Ok(()) => {
+                    // fuera también de lo que se ve (y de la lista entera, si hay filtro)
+                    for v in self.views.iter_mut().filter(|v| v.playlist.as_deref() == Some(playlist.as_str())) {
+                        let gone = |x: &Item| x.video_id.as_deref() == Some(video_id.as_str());
+                        if let Some(i) = v.items.iter().position(gone) {
+                            v.items.remove(i);
+                            let n = v.items.len();
+                            v.state.select(Some(v.state.selected().unwrap_or(0).min(n.saturating_sub(1))));
+                        }
+                        if let Some(i) = v.filter.as_ref().and_then(|f| f.1.iter().position(gone)) {
+                            v.filter.as_mut().map(|f| f.1.remove(i));
+                        }
+                    }
+                    let pl = self.playlists.iter().find(|p| p.browse_id.as_deref() == Some(playlist.as_str())).map(|p| p.title.clone()).unwrap_or_default();
+                    self.notify(fill(self.s().removed_from, &[&pl, &title]), false)
+                }
+                Err(e) => self.notify(format!("{title}: {e}"), true),
+            },
             Ev::SpPlaylists(p) => {
                 self.sp_playlists = p;
                 self.fill_side();
@@ -1641,6 +1704,8 @@ impl App {
                 self.fetch_cover();
             }
             KeyCode::Char('d') | KeyCode::Delete if !ctrl && self.queue_view() => self.queue_remove(),
+            KeyCode::Char('d') | KeyCode::Delete if !ctrl && self.own_playlist_view().is_some() => self.playlist_remove(),
+            KeyCode::Char('D') => self.dislike(),
             KeyCode::Char('J') if self.queue_view() => self.queue_move(1),
             KeyCode::Char('K') if self.queue_view() => self.queue_move(-1),
             KeyCode::Char('j') | KeyCode::Down => self.nav(1),
@@ -2406,6 +2471,59 @@ impl App {
                 Err(e) => Ev::Notify(fill(s.like, &[&e]), true),
             };
             let _ = tx.send(ev);
+        });
+    }
+
+    /// La playlist de la vista de arriba, si es tuya (de las que puedes editar).
+    fn own_playlist_view(&self) -> Option<String> {
+        if self.focus != Focus::Main {
+            return None;
+        }
+        let id = self.views.last()?.playlist.clone()?;
+        self.own_playlists().iter().any(|p| p.browse_id.as_deref() == Some(id.as_str())).then_some(id)
+    }
+
+    /// d en una playlist tuya: la primera avisa, la segunda (en 3 s) la quita.
+    fn playlist_remove(&mut self) {
+        let (Some(pl), Some((_, it))) = (self.own_playlist_view(), self.selected()) else { return };
+        let Some(vid) = it.video_id.clone() else { return };
+        if !self.confirm_remove.take().is_some_and(|(v, t)| v == vid && t.elapsed() < Duration::from_secs(3)) {
+            self.confirm_remove = Some((vid, Instant::now()));
+            return self.notify(fill(self.s().remove_again, &[&it.title]), false);
+        }
+        let (api, tx) = (self.api.clone(), self.tx.clone());
+        std::thread::spawn(move || {
+            let res = api.remove_from_playlist(&pl, &vid);
+            let _ = tx.send(Ev::Removed { playlist: pl, video_id: vid, title: it.title, res });
+        });
+    }
+
+    /// D: no me gusta; si es la que suena, a la siguiente (como YouTube Music).
+    fn dislike(&mut self) {
+        let Some(it) = self.target() else { return };
+        if !self.api.authed() {
+            return self.notify(self.s().need_account, true);
+        }
+        let (api, tx, s) = (self.api.clone(), self.tx.clone(), self.s());
+        let title = it.title.clone();
+        let vid = it.video_id.clone().unwrap_or_default();
+        std::thread::spawn(move || {
+            let ev = match api.dislike(&vid) {
+                Ok(()) => Ev::Notify(fill(s.disliked, &[&title]), false),
+                Err(e) => Ev::Notify(fill(s.like, &[&e]), true),
+            };
+            let _ = tx.send(ev);
+        });
+        if self.current().is_some_and(|c| c.same_song(&it) && c.video_id == it.video_id) {
+            self.advance(false);
+        }
+    }
+
+    fn reload_playlists(&self) {
+        let (api, tx, s) = (self.api.clone(), self.tx.clone(), self.s());
+        std::thread::spawn(move || match api.library_playlists() {
+            Ok(p) => drop(tx.send(Ev::Playlists(p))),
+            Err(e) => drop(tx.send(Ev::Notify(format!("playlists: {}", api_err(s, &e)), true))),
         });
     }
 

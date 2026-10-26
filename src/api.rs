@@ -498,6 +498,11 @@ impl Api {
         self.post("like/like", json!({ "target": { "videoId": video_id } })).map(|_| ())
     }
 
+    /// «No me gusta»: YouTube Music deja de ponerla en radios y mixes.
+    pub fn dislike(&self, video_id: &str) -> Result<(), String> {
+        self.post("like/dislike", json!({ "target": { "videoId": video_id } })).map(|_| ())
+    }
+
     /// Letra (texto plano) y su fuente; None si YouTube no tiene. La pestaña
     /// "Lyrics" del panel de reproducción apunta a un browseId MPLY….
     pub fn lyrics(&self, video_id: &str) -> Result<Option<(String, String)>, String> {
@@ -580,6 +585,41 @@ impl Api {
             Some("STATUS_SUCCEEDED") | None => Ok(()),
             Some(s) => Err(s.to_string()),
         }
+    }
+
+    /// Quitar hace falta el id de la canción *en* la playlist (setVideoId),
+    /// que no viene en las filas: lo da `next` con la playlist puesta. Si está
+    /// repetida, se va la primera.
+    pub fn remove_from_playlist(&self, playlist: &str, video_id: &str) -> Result<(), String> {
+        let id = playlist.strip_prefix("VL").unwrap_or(playlist);
+        let next = self.post("next", json!({ "videoId": video_id, "playlistId": id, "isAudioOnly": true }))?;
+        let mut panels = Vec::new();
+        collect(&next, "playlistPanelVideoRenderer", &mut panels);
+        let set = panels
+            .iter()
+            .find(|p| p["videoId"].as_str() == Some(video_id))
+            .and_then(|p| p["playlistSetVideoId"].as_str())
+            .ok_or("no está en la playlist")?;
+        let v = self.post(
+            "browse/edit_playlist",
+            json!({
+                "playlistId": id,
+                "actions": [{ "action": "ACTION_REMOVE_VIDEO", "setVideoId": set, "removedVideoId": video_id }],
+            }),
+        )?;
+        match v["status"].as_str() {
+            Some("STATUS_SUCCEEDED") | None => Ok(()),
+            Some(s) => Err(s.to_string()),
+        }
+    }
+
+    /// Playlist nueva (privada) con esas canciones; su browseId («VL…»).
+    pub fn create_playlist(&self, title: &str, video_ids: &[String]) -> Result<String, String> {
+        let v = self.post(
+            "playlist/create",
+            json!({ "title": title, "description": "", "privacyStatus": "PRIVATE", "videoIds": video_ids }),
+        )?;
+        v["playlistId"].as_str().map(|id| format!("VL{id}")).ok_or_else(|| "YouTube no la creó".into())
     }
 }
 

@@ -824,19 +824,42 @@ impl App {
     }
 
     fn draw_add_to(&mut self, f: &mut Frame) {
-        let t = self.theme;
-        let pls = self.own_playlists();
-        let Some(Popup::AddTo { item, .. }) = &self.popup else { return };
-        let title = format!(" {} ", self.tx(&fill(self.s().add_to, &[&item.title])));
-        let w = pls.iter().map(|p| p.title.chars().count()).max().unwrap_or(0).max(title.chars().count()) as u16 + 6;
-        let h = (pls.len() as u16 + 2).min(f.area().height.saturating_sub(4));
-        let area = self.popup_area(f, w.min(f.area().width.saturating_sub(4)), h);
-        let items: Vec<ListItem> =
-            pls.iter().map(|p| ListItem::new(Line::styled(p.title.clone(), Style::new().fg(t.fg)))).collect();
+        let (t, s) = (self.theme, self.s());
+        let Some(Popup::AddTo { item, naming, .. }) = &self.popup else { return };
+        let title = format!(" {} ", self.tx(&fill(s.add_to, &[&item.title])));
         let block = self
             .block(true)
-            .title(Line::styled(title, Style::new().fg(t.primary).bold()))
+            .title(Line::styled(title.clone(), Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
+        // poniéndole nombre a la nueva
+        if let Some((name, _)) = naming {
+            let w = (title.chars().count().max(name.chars().count() + 12) as u16 + 6).min(f.area().width.saturating_sub(4));
+            let area = self.popup_area(f, w, 3);
+            let label = format!("{} ", self.tx(s.playlist_name));
+            let line = Line::from(vec![
+                Span::styled(label.clone(), Style::new().fg(t.muted)),
+                Span::styled(name.clone(), Style::new().fg(t.fg).bold()),
+            ]);
+            let inner = block.inner(area);
+            f.render_widget(Paragraph::new(line).block(block), area);
+            let x = Line::from(format!("{label}{name}")).width() as u16;
+            f.set_cursor_position((inner.x + x.min(inner.width.saturating_sub(1)), inner.y));
+            let mut hits = self.hits.borrow_mut();
+            hits.popup = area;
+            hits.popup_rows.clear();
+            return;
+        }
+        // arriba, crear una (con esta o con toda la cola); luego las tuyas
+        let mut rows: Vec<(String, Style)> = vec![(self.tx(s.new_playlist), Style::new().fg(t.accent))];
+        if self.add_to_extra() > 1 {
+            rows.push((self.tx(&fill(s.new_playlist_queue, &[&self.queue.len().to_string()])), Style::new().fg(t.accent)));
+        }
+        rows.extend(self.own_playlists().into_iter().map(|p| (p.title, Style::new().fg(t.fg))));
+        let pls = rows;
+        let w = pls.iter().map(|p| p.0.chars().count()).max().unwrap_or(0).max(title.chars().count()) as u16 + 6;
+        let h = (pls.len() as u16 + 2).min(f.area().height.saturating_sub(4));
+        let area = self.popup_area(f, w.min(f.area().width.saturating_sub(4)), h);
+        let items: Vec<ListItem> = pls.iter().map(|(p, st)| ListItem::new(Line::styled(p.clone(), *st))).collect();
         let (hl, mark) = self.sel(true);
         let list = List::new(items).block(block).highlight_style(hl).highlight_symbol(mark);
         if let Some(Popup::AddTo { state, .. }) = &mut self.popup {
@@ -1422,6 +1445,7 @@ impl App {
         let t = self.theme;
         let s = self.s();
         let keys = match (&self.popup, self.focus) {
+            (Some(Popup::AddTo { naming: Some(_), .. }), _) => s.foot_naming,
             (Some(Popup::AddTo { .. }), _) => s.foot_add,
             (Some(Popup::Help), _) => s.foot_help,
             (Some(Popup::Settings { .. }), _) => s.foot_settings,
