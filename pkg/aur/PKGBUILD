@@ -16,7 +16,7 @@ optdepends=(
   'ttf-nerd-fonts-symbols: icons in buttons and badges'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('fd1d0cfba2706ded08dbd1659a6dc4d5de438329f68821bbeb77043a2438765a')
 
 prepare() {
   cd "$pkgname-$pkgver"
