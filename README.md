@@ -230,6 +230,22 @@ Para seleccionar texto, Mayús + arrastrar; o se apaga en ajustes → Ratón.
 En **Cola**: `Enter` salta a esa canción, `d`/`Supr` la quita, `J`/`K` la mueven.
 En **una playlist tuya**: `d` dos veces la quita de la playlist.
 
+### Teclas propias
+
+En `~/.config/rola/keys.json`, `"acción": "tecla"` (o una lista). La tecla
+nueva hace esa acción y la de siempre sigue valiendo, salvo que se la des a
+otra; en la búsqueda y en el filtro las teclas son las de siempre. `?` las
+enseña al final.
+
+```json
+{ "pause": "p", "previous": "b", "next": ["ctrl+n", "F9"] }
+```
+
+Teclas: una letra (`J` y `j` son distintas), `space`, `enter`, `tab`,
+`backspace`, `esc`, flechas (`up`…), `home`, `end`, `pageup`, `pagedown`,
+`delete`, `F1`–`F12`, con `ctrl+` o `alt+` delante. Acciones (y su tecla de
+siempre): `search` (/) · `filter` (f) · `play` (enter) · `pause` (space) · `next` (n) · `previous` (p) · `seek_back` (<) · `seek_forward` (>) · `volume_up` (+) · `volume_down` (-) · `shuffle` (s) · `repeat` (r) · `autoplay` (a) · `enqueue` (z) · `radio` (R) · `like` (L) · `dislike` (D) · `add_to_playlist` (P) · `remove` (d) · `move_down` (J) · `move_up` (K) · `lyrics` (y) · `cover` (c) · `info` (i) · `sleep` (t) · `sound` (e) · `copy_link` (Y) · `wrapped` (W) · `party` (F) · `settings` (o) · `help` (?) · `down` (j) · `up` (k) · `top` (g) · `bottom` (G) · `left` (h) · `right` (l) · `panel` (tab) · `back` (backspace) · `quit` (q).
+
 Al salir se guardan volumen, modos, la cola y por dónde ibas
 (`~/.local/state/rola/state.json`); al volver, `espacio` sigue desde ahí.
 

@@ -10,6 +10,7 @@ mod config;
 mod discord;
 mod hypr;
 mod i18n;
+mod keys;
 mod login;
 mod lrclib;
 mod mouse;
@@ -213,6 +214,7 @@ struct App {
     tint_at: Instant,
     theme_mtime: Option<SystemTime>,
     cfg_mtimes: [Option<SystemTime>; 2],
+    keys: keys::Keys, // las teclas propias (keys.json)
     rounded: bool, // Hyprland redondea las ventanas (para los bordes «como Hyprland»)
     streams: HashMap<String, stream::Link>, // video_id → enlace directo ya resuelto
     retried: Option<String>, // la que ya falló una vez con enlace directo
@@ -344,6 +346,7 @@ impl App {
             tint_at: Instant::now(),
             theme_mtime: theme::mtime(theme::source(&cfg).as_deref()),
             cfg_mtimes: config::mtimes(),
+            keys: keys::Keys::default(),
             rounded: hypr::rounding().is_none_or(|r| r > 0),
             streams: HashMap::new(),
             retried: None,
@@ -455,6 +458,11 @@ impl App {
 
     fn start(mut self) -> App {
         self.apply_sound();
+        let (keys, bad) = keys::Keys::load();
+        self.keys = keys;
+        if !bad.is_empty() {
+            self.notify(fill(self.s().keys_bad, &[&bad.join(", ")]), true);
+        }
         // lo que tocaba guardar y no dio tiempo (o se borró a mano)
         if self.cfg.offline_mb > 0 {
             self.offline_changed();
@@ -1387,6 +1395,8 @@ impl App {
     // ── eventos ──
     fn handle(&mut self, ev: Ev) {
         match ev {
+            // las teclas propias, solo donde no se escribe ni hay ventana
+            Ev::Key(k) if self.popup.is_none() && !matches!(self.focus, Focus::Search | Focus::Filter) => self.key(self.keys.translate(k)),
             Ev::Key(k) => self.key(k),
             Ev::Mouse(m) => self.mouse(m),
             Ev::Media(m) => self.media(m),

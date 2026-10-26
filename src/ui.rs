@@ -732,18 +732,20 @@ impl App {
 
     fn draw_help(&self, f: &mut Frame) {
         let (t, help) = (self.theme, self.s().help);
-        let kw = help.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
-        let lines: Vec<Line> = help
-            .iter()
-            .map(|(k, d)| {
-                Line::from(vec![
-                    Span::styled(format!("{k:>kw$}  "), Style::new().fg(t.primary).bold()),
-                    Span::styled(self.tx(d), Style::new().fg(t.fg)),
-                ])
-            })
-            .collect();
+        let own = &self.keys.shown;
+        let kw = help.iter().map(|(k, _)| k.chars().count()).chain(own.iter().map(|(k, _)| k.chars().count())).max().unwrap_or(0);
+        let row = |k: &str, d: String| {
+            Line::from(vec![Span::styled(format!("{k:>kw$}  "), Style::new().fg(t.primary).bold()), Span::styled(d, Style::new().fg(t.fg))])
+        };
+        let mut lines: Vec<Line> = help.iter().map(|(k, d)| row(k, self.tx(d))).collect();
+        // las de keys.json, debajo
+        if !own.is_empty() {
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(self.tx(self.s().keys_own), Style::new().fg(t.muted).italic()));
+            lines.extend(own.iter().map(|(k, a)| row(k, a.clone())));
+        }
         let w = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
-        let area = self.popup_area(f, w, help.len() as u16 + 2);
+        let area = self.popup_area(f, w, (lines.len() as u16 + 2).min(f.area().height.saturating_sub(2)));
         self.hits.borrow_mut().popup = area;
         let block = self
             .block(true)
