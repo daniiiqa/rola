@@ -102,6 +102,7 @@ const XFADE_PREP: f64 = 4.0;
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
     Search,
+    Filter, // escribiendo el filtro de la lista (`f`)
     Side,
     Main,
     Lyrics,
@@ -162,6 +163,30 @@ struct View {
     queue: bool, // la cola en vivo (items vacío)
     radio: bool, // Enter en una canción pone su radio (inicio, búsqueda), como en YT Music
     state: TableState,
+    filter: Option<(String, Vec<Item>)>, // lo escrito con `f` y la lista entera
+}
+
+/// Para filtrar: sin mayúsculas ni acentos («cancion» encuentra «Canción»).
+fn fold(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            c => c,
+        })
+        .collect()
+}
+
+/// Cada palabra de `q`, en el título, el artista o el álbum.
+fn filter_match(it: &Item, q: &str) -> bool {
+    let hay = fold(&format!("{} {} {}", it.title, it.artist, it.album));
+    fold(q).split_whitespace().all(|w| hay.contains(w))
 }
 
 struct App {
@@ -622,7 +647,7 @@ impl App {
                 self.loading = None;
                 self.views.clear();
                 let sel = self.qi.unwrap_or(0);
-                self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)) });
+                self.push(View { title, items: Vec::new(), queue: true, radio: false, state: TableState::default().with_selected(Some(sel)), filter: None });
             }
             Side::Sep | Side::Hint | Side::Head(_) => return,
         }
@@ -922,7 +947,8 @@ impl App {
         self.sp_match.insert(sp.clone(), vid.clone());
         self.sp_dirty = true;
         for v in self.views.iter_mut() {
-            for it in v.items.iter_mut().filter(|x| x.sp_track() == Some(&sp)) {
+            let all = v.filter.iter_mut().flat_map(|f| f.1.iter_mut());
+            for it in v.items.iter_mut().chain(all).filter(|x| x.sp_track() == Some(&sp)) {
                 it.video_id = vid.clone();
             }
         }
@@ -1382,7 +1408,7 @@ impl App {
                         let mut items = items;
                         self.resolve_spotify(&mut items);
                         let state = TableState::default().with_selected(Some(0));
-                        self.push(View { title, items, queue: false, radio, state });
+                        self.push(View { title, items, queue: false, radio, state, filter: None });
                     }
                     Err(e) => {
                         // al arrancar, sin nada en pantalla: un tropiezo de YouTube
@@ -1555,6 +1581,9 @@ impl App {
         if self.popup.is_some() {
             return self.popup_key(k);
         }
+        if self.focus == Focus::Filter {
+            return self.filter_key(k);
+        }
         if self.focus == Focus::Search {
             match k.code {
                 KeyCode::Enter => {
@@ -1582,6 +1611,7 @@ impl App {
         match k.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('/') => self.focus = Focus::Search,
+            KeyCode::Char('f') => self.start_filter(),
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Side => Focus::Main,
@@ -1626,6 +1656,8 @@ impl App {
                 Focus::Main => self.activate(),
                 _ => {}
             },
+            // primero se quita el filtro; luego, atrás
+            KeyCode::Backspace | KeyCode::Esc if self.views.last().is_some_and(|v| v.filter.is_some()) => self.set_filter(None),
             KeyCode::Backspace | KeyCode::Esc => {
                 if self.views.len() > 1 {
                     self.views.pop();
@@ -1670,6 +1702,55 @@ impl App {
             KeyCode::Char('F') => self.party_key(),
             _ => {}
         }
+    }
+
+    // ── filtro de la lista (`f`) ──
+    fn start_filter(&mut self) {
+        let Some(v) = self.views.last_mut().filter(|v| !v.queue) else { return };
+        if v.filter.is_none() {
+            v.filter = Some((String::new(), v.items.clone()));
+        }
+        self.focus = Focus::Filter;
+    }
+
+    /// Lo escrito pasa a filtrar la lista de arriba; None la deja entera.
+    fn set_filter(&mut self, q: Option<String>) {
+        let Some(v) = self.views.last_mut() else { return };
+        let Some((_, all)) = v.filter.take() else { return };
+        match q {
+            Some(q) => {
+                v.items = all.iter().filter(|it| filter_match(it, &q)).cloned().collect();
+                v.filter = Some((q, all));
+            }
+            None => v.items = all,
+        }
+        v.state.select(Some(0));
+    }
+
+    fn filter_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let mut q = self.views.last().and_then(|v| v.filter.as_ref()).map(|f| f.0.clone()).unwrap_or_default();
+        match k.code {
+            KeyCode::Esc => {
+                self.focus = Focus::Main;
+                return self.set_filter(None);
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                self.focus = Focus::Main;
+                // vacío: como si no hubiera filtro
+                if q.trim().is_empty() {
+                    self.set_filter(None);
+                }
+                return;
+            }
+            KeyCode::Down => return self.nav(1),
+            KeyCode::Up => return self.nav(-1),
+            KeyCode::Backspace => drop(q.pop()),
+            KeyCode::Char('u') if ctrl => q.clear(),
+            KeyCode::Char(c) if !ctrl => q.push(c),
+            _ => return,
+        }
+        self.set_filter(Some(q));
     }
 
     /// Pausa o sigue; con la sesión restaurada sin cargar, la arranca.
@@ -2718,6 +2799,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_words() {
+        let it = Item { kind: Kind::Song, title: "Canción Bonita".into(), artist: "Peso Pluma".into(), album: "Génesis".into(), duration: String::new(), video_id: None, browse_id: None, thumb: String::new() };
+        assert!(filter_match(&it, "cancion"));
+        assert!(filter_match(&it, "PLUMA bonita"));
+        assert!(filter_match(&it, "genesis"));
+        assert!(filter_match(&it, ""));
+        assert!(!filter_match(&it, "pluma feid"));
+    }
 
     #[test]
     fn spread_artists() {

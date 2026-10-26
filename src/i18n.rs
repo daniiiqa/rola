@@ -138,6 +138,7 @@ pub struct Strings {
     pub foot_help: Keys,
     pub foot_settings: Keys,
     pub foot_search: Keys,
+    pub foot_filter: Keys,
     pub foot_lyrics: Keys,
     pub foot_queue: Keys,
     pub foot_main: Keys,
@@ -306,6 +307,7 @@ pub static ES: Strings = Strings {
     custom_themes: "temas propios: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "buscar"),
+        ("f", "filtrar esta lista (sin acentos ni mayúsculas); esc lo quita"),
         ("Enter", "reproducir / abrir (en inicio y búsqueda, con su radio)"),
         ("espacio", "pausa"),
         ("n  p", "siguiente / anterior"),
@@ -340,6 +342,7 @@ pub static ES: Strings = Strings {
     foot_help: &[("cualquier tecla", "cerrar")],
     foot_settings: &[("j/k", "elegir"), ("h/l", "cambiar"), ("esc", "guardar y cerrar")],
     foot_search: &[("enter", "buscar"), ("esc", "volver"), ("^u", "borrar")],
+    foot_filter: &[("enter", "dejarlo"), ("esc", "quitarlo"), ("↑/↓", "elegir"), ("^u", "borrar")],
     foot_lyrics: &[("j/k", "desplazar"), ("g/G", "inicio/fin"), ("h", "volver"), ("y", "cerrar letra")],
     foot_queue: &[
         ("enter", "saltar a"),
@@ -353,6 +356,7 @@ pub static ES: Strings = Strings {
     ],
     foot_main: &[
         ("/", "buscar"),
+        ("f", "filtrar"),
         ("spc", "pausa"),
         ("n/p", "sig/ant"),
         ("z", "a la cola"),
@@ -553,6 +557,7 @@ pub static EN: Strings = Strings {
     custom_themes: "custom themes: ~/.config/rola/themes/*.conf",
     help: &[
         ("/", "search"),
+        ("f", "filter this list (ignores case and accents); esc removes it"),
         ("Enter", "play / open (in home and search, with its radio)"),
         ("space", "pause"),
         ("n  p", "next / previous"),
@@ -587,6 +592,7 @@ pub static EN: Strings = Strings {
     foot_help: &[("any key", "close")],
     foot_settings: &[("j/k", "pick"), ("h/l", "change"), ("esc", "save & close")],
     foot_search: &[("enter", "search"), ("esc", "back"), ("^u", "clear")],
+    foot_filter: &[("enter", "keep"), ("esc", "remove"), ("↑/↓", "pick"), ("^u", "clear")],
     foot_lyrics: &[("j/k", "scroll"), ("g/G", "top/end"), ("h", "back"), ("y", "close lyrics")],
     foot_queue: &[
         ("enter", "jump to"),
@@ -600,6 +606,7 @@ pub static EN: Strings = Strings {
     ],
     foot_main: &[
         ("/", "search"),
+        ("f", "filter"),
         ("spc", "pause"),
         ("n/p", "next/prev"),
         ("z", "queue"),

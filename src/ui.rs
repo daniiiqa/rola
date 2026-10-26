@@ -1171,13 +1171,23 @@ impl App {
 
     fn draw_main(&mut self, f: &mut Frame, area: Rect) {
         let t = self.theme;
-        let focused = self.focus == Focus::Main;
+        let focused = matches!(self.focus, Focus::Main | Focus::Filter);
         let n = self.items().len();
         let mut title = vec![Span::raw(" ")];
         let crumbs: Vec<String> = self.views.iter().rev().take(3).rev().map(|v| self.tx(&v.title)).collect();
         title.push(Span::styled(crumbs.join("  ›  "), Style::new().fg(t.primary).bold()));
         if !self.views.is_empty() {
             title.push(Span::styled(format!("  ·  {n}"), Style::new().fg(t.muted)));
+        }
+        // el filtro (`f`): con cursor mientras se escribe
+        if let Some((q, all)) = self.views.last().and_then(|v| v.filter.as_ref()) {
+            let typing = self.focus == Focus::Filter;
+            title.push(Span::styled(format!(" / {}", all.len()), Style::new().fg(t.muted)));
+            title.push(Span::styled(format!("   {} ", self.ic("\u{f0232}", "f:")), Style::new().fg(t.accent)));
+            title.push(Span::styled(q.clone(), Style::new().fg(t.fg).bold()));
+            if typing {
+                title.push(Span::styled("▏", Style::new().fg(t.accent)));
+            }
         }
         if let Some(l) = &self.loading {
             title.push(Span::styled(format!("   … {l}"), Style::new().fg(t.muted).italic()));
@@ -1423,6 +1433,7 @@ impl App {
             (Some(Popup::Discord { .. }), _) => s.foot_spotify,
             (Some(Popup::Info { .. }), _) => s.foot_info,
             (None, Focus::Search) => s.foot_search,
+            (None, Focus::Filter) => s.foot_filter,
             (None, Focus::Lyrics) => s.foot_lyrics,
             _ if self.queue_view() => s.foot_queue,
             _ => s.foot_main,
