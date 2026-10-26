@@ -938,8 +938,11 @@ mod tests {
         Api::new(Path::new("/nonexistent"))
     }
 
+    /// Lo enseña y, si vino vacío, falla: YouTube cambiando algo suele dar
+    /// listas vacías sin error, no errores.
     fn show(label: &str, items: &[Item]) {
         println!("── {label}: {}", items.len());
+        assert!(!items.is_empty(), "{label}: vacío");
         for i in items.iter().take(6) {
             println!("  {:?} | {} | {} | {} | {} | {:?} {:?} {}", i.kind, i.title, i.artist, i.album, i.duration, i.video_id, i.browse_id, i.thumb);
         }
@@ -968,6 +971,13 @@ mod tests {
         // Get Lucky; no todas las canciones tienen letra
         let (text, source) = a.lyrics("5NV6Rdv1a3I").unwrap().expect("sin letra");
         println!("── lyrics ({source}):\n{}", text.lines().take(6).collect::<Vec<_>>().join("\n"));
+        let info = a.song_info(song.video_id.as_ref().unwrap()).unwrap();
+        println!("── info: {} · {} · {}", info.title, info.artist, info.album);
+        assert!(!info.title.is_empty() && !info.artist.is_empty());
+        // el audio: lo que más se rompe cuando YouTube cambia (y se arregla
+        // actualizando yt-dlp)
+        let link = crate::stream::resolve(song.video_id.as_ref().unwrap(), crate::config::Quality::Best.ytdl_format()).expect("yt-dlp no sacó el audio");
+        println!("── stream {}…", &link.url[..60.min(link.url.len())]);
     }
 
     #[test]

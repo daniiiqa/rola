@@ -234,4 +234,6 @@ Al salir se guardan volumen, modos, la cola y por dónde ibas
 ## Tests
 
 `cargo test -- --ignored --nocapture` prueba búsqueda, álbum, artista,
-playlist, radio e inicio contra YouTube de verdad (útil cuando cambian algo).
+playlist, radio, inicio, letra, ficha y el audio (con yt-dlp) contra YouTube de
+verdad, y falla si algo viene vacío. GitHub lo corre solo cada lunes
+(`.github/workflows/live.yml`) y avisa por correo si se rompe.

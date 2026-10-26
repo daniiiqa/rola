@@ -1,0 +1,25 @@
+name: live
+
+# cada semana, contra YouTube de verdad: si cambian algo (la API interna o lo
+# que hace falta para sacar el audio) se ve aquí y no cuando deja de sonar.
+# GitHub avisa por correo cuando falla. También a mano, desde Actions.
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: yt-dlp, el último (el que tendría quien lo tenga al día)
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o ~/.local/bin/yt-dlp
+          chmod +x ~/.local/bin/yt-dlp
+          echo ~/.local/bin >> "$GITHUB_PATH"
+      - run: yt-dlp --version
+      - run: cargo test --locked -- --ignored --nocapture
