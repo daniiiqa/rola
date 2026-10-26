@@ -1,6 +1,6 @@
 [package]
 name = "rola"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "YouTube Music en la terminal, al estilo spotify-tui"
 license = "MIT"
