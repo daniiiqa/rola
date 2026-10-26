@@ -249,6 +249,12 @@ artista cada vez que cambia la canción (mako, swaync, dunst…). Cada uno
 sustituye al anterior. Con «si no estás mirando rola», en Hyprland no avisa
 mientras la ventana de rola tenga el foco.
 
+## El gatito
+
+En la barra de lo que suena, `(=^･ω･^=)` baila cuando suena, duerme en pausa,
+se sorprende con cada canción nueva, se enamora con tus me gusta y llora si algo
+falla. Se quita en `o` → Apariencia.
+
 ## Ratón
 
 Clic en la barra lateral abre; en una canción la elige, doble clic la pone y

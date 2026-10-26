@@ -98,6 +98,13 @@ enum Side {
     SpAlbums,
 }
 
+/// Lo que siente el gatito un momento (si no, baila o duerme según suene).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Mood {
+    Love,
+    Sad,
+}
+
 /// Temporizador para dormir.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Sleep {
@@ -296,6 +303,7 @@ struct App {
     epoch: Instant,               // reloj de las animaciones
     song_start: Instant,          // para que el título largo empiece quieto
     splash: Option<Instant>,      // canción nueva: su nombre arriba un momento
+    pet_mood: Option<(Mood, Instant)>, // el gatito, contento o triste un rato
     hits: RefCell<mouse::Hits>,   // dónde quedó cada cosa al dibujar
     last_click: Option<(Instant, u16, u16)>,
     mpris: Option<mpris::Mpris>,
@@ -436,6 +444,7 @@ impl App {
             epoch: Instant::now(),
             song_start: Instant::now(),
             splash: None,
+            pet_mood: None,
             hits: RefCell::default(),
             last_click: None,
             mpris: mpris::Mpris::start(tx.clone()),
@@ -623,6 +632,9 @@ impl App {
     }
 
     fn notify(&mut self, msg: impl Into<String>, err: bool) {
+        if err {
+            self.pet_mood = Some((Mood::Sad, Instant::now()));
+        }
         self.note = Some((msg.into(), err, Instant::now()));
     }
 
@@ -2678,6 +2690,7 @@ impl App {
         if !self.api.authed() {
             return self.notify(self.s().need_account, true);
         }
+        self.pet_mood = Some((Mood::Love, Instant::now()));
         let (api, tx, s) = (self.api.clone(), self.tx.clone(), self.s());
         std::thread::spawn(move || {
             let ev = match api.like(it.video_id.as_deref().unwrap_or("")) {

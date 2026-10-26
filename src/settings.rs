@@ -36,6 +36,7 @@ pub enum Setting {
     Lyrics,
     Footer,
     Motion,
+    Pet,
     Cover,
     Quality,
     VolStep,
@@ -66,6 +67,7 @@ pub const SECTIONS: &[Section] = &[
             Setting::Lyrics,
             Setting::Footer,
             Setting::Motion,
+            Setting::Pet,
             Setting::Cover,
         ],
     ),
@@ -104,6 +106,7 @@ impl Setting {
             Setting::Lyrics => s.set_lyrics,
             Setting::Footer => s.set_footer,
             Setting::Motion => s.set_motion,
+            Setting::Pet => s.set_pet,
             Setting::Cover => s.set_cover,
             Setting::Quality => s.set_quality,
             Setting::VolStep => s.set_vol_step,
@@ -138,6 +141,7 @@ impl Setting {
             Setting::Lyrics => "lyrics_width",
             Setting::Footer => "footer",
             Setting::Motion => "motion",
+            Setting::Pet => "pet",
             Setting::Quality => "quality",
             Setting::VolStep => "vol_step",
             Setting::Seek => "seek",
@@ -196,6 +200,7 @@ impl App {
             Setting::Lyrics => format!("{}%", c.lyrics_width),
             Setting::Footer => yn(c.footer),
             Setting::Motion => yn(c.motion),
+            Setting::Pet => yn(c.pet),
             Setting::Cover => yn(self.cover_on),
             Setting::Quality => s.qualities[idx(c.quality)].into(),
             Setting::VolStep => format!("{}%", c.vol_step),
@@ -261,6 +266,7 @@ impl App {
             Setting::Lyrics => c.lyrics_width = step_in(config::LYRICS_WIDTHS, c.lyrics_width, d),
             Setting::Footer => c.footer = !c.footer,
             Setting::Motion => c.motion = !c.motion,
+            Setting::Pet => c.pet = !c.pet,
             Setting::Cover => {
                 self.cover_on = !self.cover_on;
                 self.fetch_cover();

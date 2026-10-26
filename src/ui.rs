@@ -3,13 +3,14 @@ use crate::config::{Bar, Labels, Select, Tint};
 use crate::i18n::fill;
 use crate::mouse::{Button, Hits};
 use crate::settings::{self, SECTIONS};
-use crate::{App, Focus, Lyrics, Popup, Repeat, Side, Sleep, SPLASH};
+use crate::{App, Focus, Lyrics, Mood, Popup, Repeat, Side, Sleep, SPLASH};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 use ratatui_image::StatefulImage;
+use std::time::Duration;
 
 const I_PLAY: &str = "\u{f040a}";
 const I_PAUSE: &str = "\u{f03e4}";
@@ -183,6 +184,25 @@ impl App {
     }
 
     /// Un ecualizador de `n` barras que bailan mientras suena.
+    /// El gatito: contento o triste un rato tras un me gusta o un error,
+    /// sorprendido con cada canción nueva, y si no, baila o duerme.
+    fn pet_face(&self) -> Option<String> {
+        if !self.cfg.pet {
+            return None;
+        }
+        let face = match self.pet_mood {
+            Some((Mood::Love, at)) if at.elapsed() < Duration::from_secs(3) => "(=^♡ω♡^=)",
+            Some((Mood::Sad, at)) if at.elapsed() < Duration::from_secs(3) => "(=；ω；=)",
+            _ if self.current().is_none() => "(=^･ω･^=)",
+            _ if self.splash.is_some_and(|s| s.elapsed() < Duration::from_secs(2)) => "(=ﾟωﾟ=)!",
+            _ if !self.playing() => "(=ᵕ ᴗ ᵕ=)ᶻᶻ",
+            _ if !self.cfg.motion => "(=^･ω･^=)♪",
+            // baila: un paso cada medio segundo
+            _ => ["(=^･ω･^=)♪", "♪(=^･ω･^)", "(=^･ω･^)ノ♪", "♪(=^･ω･^=)"][(self.epoch.elapsed().as_millis() / 500 % 4) as usize],
+        };
+        Some(face.to_string())
+    }
+
     fn eq(&self, n: usize) -> String {
         let lv: &[char] = if self.cfg.bar == Bar::Ascii {
             &['_', '.', '-', '=', '#']
@@ -1426,8 +1446,18 @@ impl App {
         if self.party.is_some() {
             flags.spans.push(Span::styled(format!("{gap}{}", self.ic3("\u{f0849}", "party", self.s().party_word)), Style::new().fg(t.accent).bold()));
         }
-        let [left, right] =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(flags.width() as u16 + 1)]).areas(top);
+        // el gatito, entre el título y los botones (si cabe sin apretar el título)
+        let pet = self.pet_face().filter(|_| top.width >= 70);
+        let pw = pet.as_ref().map_or(0, |p| Line::from(p.as_str()).width() as u16 + 2);
+        let [left, pet_area, right] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(pw),
+            Constraint::Length(flags.width() as u16 + 1),
+        ])
+        .areas(top);
+        if let Some(p) = pet {
+            f.render_widget(Paragraph::new(Line::styled(p, Style::new().fg(self.gradient(0.8)))).right_aligned(), pet_area);
+        }
         {
             // va alineado a la derecha: cada botón donde cae su trozo
             let mut x = right.right().saturating_sub(flags.width() as u16);
