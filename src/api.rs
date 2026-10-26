@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ORIGIN: &str = "https://music.youtube.com";
+/// Error de las peticiones de la cuenta cuando YouTube ya no acepta la sesión
+/// guardada (y no se pudo renovar): la interfaz lo traduce.
+pub const SESSION_EXPIRED: &str = "session expired";
 const UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
 const TYPE_WORDS: &[&str] = &[
     "Song", "Video", "Album", "Single", "EP", "Playlist", "Artist", "Episode", "Podcast", "Profile",
@@ -321,29 +324,39 @@ impl Api {
         Ok((first, items))
     }
 
+    /// browse de algo de la cuenta: con la sesión muerta YouTube contesta como a
+    /// un invitado (vacío, sin error), y eso no puede pasar por «no tienes nada».
+    fn browse_account(&self, browse_id: &str, pages: usize) -> Result<Vec<Item>, String> {
+        let (first, items) = self.browse(browse_id, pages)?;
+        if self.authed() && logged_out(&first) {
+            return Err(SESSION_EXPIRED.into());
+        }
+        Ok(items)
+    }
+
     pub fn home(&self) -> Result<Vec<Item>, String> {
         Ok(self.browse("FEmusic_home", 0)?.1)
     }
 
     pub fn liked(&self) -> Result<Vec<Item>, String> {
-        Ok(self.browse("VLLM", 40)?.1)
+        self.browse_account("VLLM", 40)
     }
 
     pub fn history(&self) -> Result<Vec<Item>, String> {
-        Ok(self.browse("FEmusic_history", 0)?.1)
+        self.browse_account("FEmusic_history", 0)
     }
 
     pub fn library_playlists(&self) -> Result<Vec<Item>, String> {
-        let (_, items) = self.browse("FEmusic_liked_playlists", 10)?;
+        let items = self.browse_account("FEmusic_liked_playlists", 10)?;
         Ok(items.into_iter().filter(|i| i.kind == Kind::Playlist).collect())
     }
 
     pub fn library_albums(&self) -> Result<Vec<Item>, String> {
-        Ok(self.browse("FEmusic_liked_albums", 10)?.1)
+        self.browse_account("FEmusic_liked_albums", 10)
     }
 
     pub fn library_artists(&self) -> Result<Vec<Item>, String> {
-        Ok(self.browse("FEmusic_library_corpus_track_artists", 10)?.1)
+        self.browse_account("FEmusic_library_corpus_track_artists", 10)
     }
 
     pub fn playlist(&self, id: &str) -> Result<Vec<Item>, String> {

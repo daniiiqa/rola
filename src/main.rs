@@ -432,10 +432,10 @@ impl App {
         self.fill_side();
         self.load_spotify();
         if self.api.authed() {
-            let (api, tx) = (self.api.clone(), self.tx.clone());
+            let (api, tx, s) = (self.api.clone(), self.tx.clone(), self.s());
             std::thread::spawn(move || match api.library_playlists() {
                 Ok(p) => drop(tx.send(Ev::Playlists(p))),
-                Err(e) => drop(tx.send(Ev::Notify(format!("playlists: {e}"), true))),
+                Err(e) => drop(tx.send(Ev::Notify(format!("playlists: {}", api_err(s, &e)), true))),
             });
         }
         self.open(self.s().home, Load::Home, true);
@@ -1391,7 +1391,7 @@ impl App {
                                 let _ = tx.send(Ev::RetryHome);
                             });
                         }
-                        self.notify(format!("{title}: {e}"), true)
+                        self.notify(format!("{title}: {}", api_err(self.s(), &e)), true)
                     }
                 }
             }
@@ -2605,8 +2605,13 @@ fn login_test(file: &std::path::Path) {
     let s = Config::load().lang.s();
     match Api::new(file).library_playlists() {
         Ok(p) => println!("{}", fill(s.login_ok, &[&p.len().to_string(), &file.display().to_string()])),
-        Err(e) => println!("{}", fill(s.login_test_failed, &[&file.display().to_string(), &e])),
+        Err(e) => println!("{}", fill(s.login_test_failed, &[&file.display().to_string(), &api_err(s, &e)])),
     }
+}
+
+/// Los errores de la API que tienen texto propio, en el idioma de la interfaz.
+fn api_err(s: &Strings, e: &str) -> String {
+    if e == api::SESSION_EXPIRED { s.session_expired.to_string() } else { e.to_string() }
 }
 
 /// Antes se llamaba ytm: la primera vez, sus carpetas pasan a las de rola.
