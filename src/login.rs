@@ -17,14 +17,25 @@ pub struct Browser {
     used: Option<SystemTime>,
 }
 
-/// (nombre, carpeta bajo ~) de los de la familia de Firefox: yt-dlp los lee
-/// todos como «firefox» si le das la carpeta del perfil.
-const FIREFOXES: &[(&str, &str)] = &[
-    ("Firefox", ".mozilla/firefox"),
-    ("Zen", ".zen"),
-    ("LibreWolf", ".librewolf"),
-    ("Floorp", ".floorp"),
-    ("Waterfox", ".waterfox"),
+/// Los de la familia de Firefox, con las carpetas (bajo ~) donde pueden tener
+/// sus perfiles: la de siempre, la de ~/.config (las instalaciones nuevas, desde
+/// que Firefox sigue XDG) y la del Flatpak. yt-dlp los lee todos como
+/// «firefox» si le das la carpeta del perfil.
+const FIREFOXES: &[(&str, &[&str])] = &[
+    (
+        "Firefox",
+        &[
+            ".mozilla/firefox",
+            ".config/mozilla/firefox",
+            ".var/app/org.mozilla.firefox/.mozilla/firefox",
+            ".var/app/org.mozilla.firefox/config/mozilla/firefox",
+            "snap/firefox/common/.mozilla/firefox",
+        ],
+    ),
+    ("Zen", &[".zen", ".config/zen", ".var/app/app.zen_browser.zen/.zen", ".var/app/app.zen_browser.zen/config/zen"]),
+    ("LibreWolf", &[".librewolf", ".config/librewolf", ".var/app/io.gitlab.librewolf-community/.librewolf"]),
+    ("Floorp", &[".floorp", ".config/floorp", ".var/app/one.ablaze.floorp/.floorp"]),
+    ("Waterfox", &[".waterfox", ".config/waterfox", ".var/app/net.waterfox.waterfox/.waterfox"]),
 ];
 
 /// (nombre, carpeta bajo ~/.config, nombre para yt-dlp)
@@ -43,14 +54,16 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 
 /// Los navegadores que hay, el último que se usó primero.
 pub fn browsers() -> Vec<Browser> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    browsers_in(&PathBuf::from(std::env::var("HOME").unwrap_or_default()))
+}
+
+fn browsers_in(home: &Path) -> Vec<Browser> {
     let mut out = Vec::new();
-    for (name, dir) in FIREFOXES {
-        // de sus perfiles, el que tenga las cookies más recientes
-        let best = std::fs::read_dir(home.join(dir))
-            .into_iter()
-            .flatten()
-            .flatten()
+    for (name, dirs) in FIREFOXES {
+        // de sus perfiles (estén donde estén), el de las cookies más recientes
+        let best = dirs
+            .iter()
+            .flat_map(|d| std::fs::read_dir(home.join(d)).into_iter().flatten().flatten())
             .filter_map(|e| Some((mtime(&e.path().join("cookies.sqlite"))?, e.path())))
             .max_by_key(|(t, _)| *t);
         if let Some((t, p)) = best {
@@ -71,10 +84,13 @@ pub fn browsers() -> Vec<Browser> {
 }
 
 pub fn name_of(arg: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    name_in(arg, &std::env::var("HOME").unwrap_or_default())
+}
+
+fn name_in(arg: &str, home: &str) -> String {
     FIREFOXES
         .iter()
-        .find(|(_, d)| arg.starts_with(&format!("firefox:{home}/{d}/")))
+        .find(|(_, ds)| ds.iter().any(|d| arg.starts_with(&format!("firefox:{home}/{d}/"))))
         .map(|(n, _)| n.to_string())
         .or_else(|| CHROMES.iter().find(|c| c.2 == arg).map(|c| c.0.to_string()))
         .unwrap_or_else(|| arg.to_string())
@@ -153,6 +169,21 @@ pub fn save(file: &Path, auth: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_new_profile_dirs() {
+        // un HOME de mentira con el Zen nuevo (~/.config/zen) y un Firefox Flatpak
+        let home = std::env::temp_dir().join(format!("rola-home-{}", std::process::id()));
+        for d in [".config/zen/abc.Default (release)", ".var/app/org.mozilla.firefox/.mozilla/firefox/x.default"] {
+            std::fs::create_dir_all(home.join(d)).unwrap();
+            std::fs::write(home.join(d).join("cookies.sqlite"), "").unwrap();
+        }
+        let h = home.display().to_string();
+        let found: Vec<(String, String)> = browsers_in(&home).iter().map(|b| (b.name.to_string(), name_in(&b.arg, &h))).collect();
+        let _ = std::fs::remove_dir_all(&home);
+        assert!(found.contains(&("Zen".into(), "Zen".into())), "{found:?}");
+        assert!(found.contains(&("Firefox".into(), "Firefox".into())), "{found:?}");
+    }
 
     #[test]
     fn only_youtube_cookies() {
