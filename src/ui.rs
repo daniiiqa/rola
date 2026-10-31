@@ -1499,14 +1499,18 @@ impl App {
                 hits.buttons.push((Rect::new(x, top.y, w, 1), b));
                 x += w;
             }
-            if self.current().is_some() {
+            if self.cel_shown().is_some() {
+                hits.buttons.push((Rect::new(left.x, top.y, 2, 1), Button::Play));
+            } else if self.current().is_some() {
                 hits.buttons.push((Rect::new(left.x, top.y, 2, 1), Button::Play));
                 hits.buttons.push((Rect::new(left.x + 2, top.y, left.width.saturating_sub(2), 1), Button::Title));
             }
         }
         f.render_widget(Paragraph::new(flags).right_aligned(), right);
 
-        let it = self.current();
+        // la música del cel por Bluetooth ocupa el lugar mientras rola no suena
+        let cel = self.cel_shown();
+        let it = if cel.is_some() { None } else { self.current() };
         let now = match it {
             Some(it) => {
                 let icon = if self.playing() { self.ic(I_PAUSE, "⏸") } else { self.ic(I_PLAY, "▶") };
@@ -1529,20 +1533,28 @@ impl App {
                 lead.extend(self.marquee(v, left.width.saturating_sub(lw)).spans);
                 Line::from(lead)
             }
-            None => Line::styled(self.tx(self.s().idle_hint), Style::new().fg(t.muted).italic()),
+            None => match cel {
+                Some(c) => self.cel_line(c, left.width),
+                None => Line::styled(self.tx(self.s().idle_hint), Style::new().fg(t.muted).italic()),
+            },
         };
         f.render_widget(Paragraph::new(now), left);
 
-        let (l, r) = if it.is_some() { (fmt(self.pos), fmt(self.dur)) } else { (fmt(None), fmt(None)) };
+        let (pos, dur) = match cel {
+            Some(c) => (c.pos, c.dur),
+            None => (self.pos, self.dur),
+        };
+        let shown = it.is_some() || cel.is_some();
+        let (l, r) = if shown { (fmt(pos), fmt(dur)) } else { (fmt(None), fmt(None)) };
         let bw = (prog.width as usize).saturating_sub(l.len() + r.len() + 2);
-        let frac = match (self.pos, self.dur) {
+        let frac = match (pos, dur) {
             (Some(p), Some(d)) if d > 0.0 => (p / d).clamp(0.0, 1.0),
             _ => 0.0,
         };
         let done = (bw as f64 * frac).round() as usize;
         self.hits.borrow_mut().prog = Rect::new(prog.x + l.len() as u16 + 1, prog.y, bw as u16, 1);
         let (full, head, rest) = self.cfg.bar.glyphs();
-        let (body, head) = if done > 0 && it.is_some() {
+        let (body, head) = if done > 0 && shown {
             (full.repeat(done - 1), head)
         } else {
             (String::new(), "")
@@ -1559,6 +1571,26 @@ impl App {
         spans.push(Span::styled(rest.repeat(bw - done), Style::new().fg(t.border)));
         spans.push(Span::styled(format!(" {r}"), Style::new().fg(t.muted)));
         f.render_widget(Paragraph::new(Line::from(spans)), prog);
+    }
+
+    /// «⏸ 󰄜 Daniel's S21  Loco Loco · Eslabon Armado»: lo que suena en el cel.
+    fn cel_line(&self, c: &crate::cel::Cel, width: u16) -> Line<'static> {
+        let t = self.theme;
+        let icon = if c.playing { self.ic(I_PAUSE, "⏸") } else { self.ic(I_PLAY, "▶") };
+        let mut lead = vec![Span::styled(format!("{icon} "), Style::new().fg(t.primary))];
+        if self.cfg.motion && c.playing {
+            lead.push(Span::styled(format!("{} ", self.eq(4)), Style::new().fg(self.gradient(0.5))));
+        }
+        lead.push(Span::raw(" "));
+        lead.push(Span::styled(format!("{} {}", self.ic("\u{f011c}", "cel"), c.name), Style::new().fg(t.accent)));
+        lead.push(Span::raw("  "));
+        let mut v = vec![Span::styled(c.title.clone(), Style::new().fg(t.fg).bold())];
+        if !c.artist.is_empty() {
+            v.push(Span::styled(format!("  ·  {}", c.artist), Style::new().fg(t.muted)));
+        }
+        let lw = Line::from(lead.clone()).width() as u16;
+        lead.extend(self.marquee(v, width.saturating_sub(lw)).spans);
+        Line::from(lead)
     }
 
     fn draw_footer(&self, f: &mut Frame, area: Rect) {

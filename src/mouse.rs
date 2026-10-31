@@ -113,7 +113,10 @@ impl App {
             self.seek_to(h, x);
         } else if let Some(&(_, btn)) = h.buttons.iter().find(|(r, _)| inside(*r, x, y)) {
             match btn {
-                Button::Play => self.play_pause(),
+                Button::Play => match self.cel_shown() {
+                    Some(c) => c.send("PlayPause"),
+                    None => self.play_pause(),
+                },
                 Button::Shuffle => self.set_shuffle(!self.shuffle),
                 Button::Repeat => self.press(KeyCode::Char('r')),
                 Button::Autoplay => self.press(KeyCode::Char('a')),

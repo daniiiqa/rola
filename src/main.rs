@@ -6,6 +6,7 @@
 mod api;
 mod bar;
 mod cache;
+mod cel;
 mod config;
 mod discord;
 mod hypr;
@@ -80,6 +81,7 @@ pub enum Ev {
     SpPlaylists(Vec<Item>),
     Matched { sp: String, vid: Option<String> }, // canción de Spotify → la de YouTube Music
     Look, // Hyprland recargó su config (p. ej. al cambiar de look)
+    Cel(Option<cel::Cel>), // lo que suena en el cel por Bluetooth (o ya nada)
 }
 
 #[derive(Clone, PartialEq)]
@@ -322,6 +324,7 @@ struct App {
     matcher: Arc<(Mutex<VecDeque<Item>>, Condvar)>, // las que faltan por buscar en YouTube Music
     matching: HashSet<String>,
     sp_wait: Option<String>, // la que toca sonar, esperando a que se encuentre
+    cel: Option<cel::Cel>,   // la música del cel por Bluetooth, si suena por aquí
 }
 
 /// Lo que dura el aviso de canción nueva.
@@ -453,6 +456,10 @@ impl App {
             hits: RefCell::default(),
             last_click: None,
             mpris: mpris::Mpris::start(tx.clone()),
+            cel: {
+                cel::watch(tx.clone());
+                None
+            },
             track_n: 0,
             login_skipped: st["login_skipped"].as_bool().unwrap_or(false),
             spotify: spotify::Spotify::load(&data_dir().join("spotify.json")),
@@ -1778,7 +1785,19 @@ impl App {
                 self.rounded = hypr::rounding().is_none_or(|r| r > 0);
                 self.check_files();
             }
+            Ev::Cel(c) => {
+                // dos canciones a la vez no: si rola suena, el cel se calla
+                if let Some(c) = c.as_ref().filter(|c| c.playing && self.playing()) {
+                    c.send("Pause");
+                }
+                self.cel = c;
+            }
         }
+    }
+
+    /// El cel se ve (y se maneja con las teclas) mientras rola no suena.
+    pub fn cel_shown(&self) -> Option<&cel::Cel> {
+        self.cel.as_ref().filter(|_| !self.playing())
     }
 
     fn key(&mut self, k: KeyEvent) {
@@ -1894,6 +1913,9 @@ impl App {
                     self.loading = None;
                 }
             }
+            KeyCode::Char(' ') if self.cel_shown().is_some() => self.cel_shown().unwrap().send("PlayPause"),
+            KeyCode::Char('n') if self.cel_shown().is_some() => self.cel_shown().unwrap().send("Next"),
+            KeyCode::Char('p') if self.cel_shown().is_some() => self.cel_shown().unwrap().send("Previous"),
             KeyCode::Char(' ') => {
                 if self.qi.is_none() {
                     self.activate();
