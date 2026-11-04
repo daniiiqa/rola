@@ -406,8 +406,12 @@ impl App {
             .block(self.focus == Focus::Lyrics)
             .title(Line::styled(format!(" {} ", self.tx(s.lyrics)), Style::new().fg(t.primary).bold()))
             .padding(ratatui::widgets::Padding::horizontal(1));
-        // sin letra: una rocola
-        if let (Some((_, Lyrics::Missing)), Some(it)) = (&self.lyrics, self.current()) {
+        // sin letra: una rocola (con la del cel si es la que suena)
+        let playing_it = match self.cel_shown() {
+            Some(c) => Some(c.item()),
+            None => self.current().cloned(),
+        };
+        if let (Some((_, Lyrics::Missing)), Some(it)) = (&self.lyrics, playing_it.as_ref()) {
             self.hits.borrow_mut().lyrics = area;
             let block = block.title_bottom(Line::styled(format!(" {} ", self.tx(s.no_lyrics)), Style::new().fg(t.muted).italic()).centered());
             let inner = block.inner(area);

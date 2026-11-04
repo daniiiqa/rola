@@ -109,10 +109,17 @@ pub fn watch(tx: Sender<Ev>) {
         let mut last: Option<Cel> = None;
         loop {
             let mut now = scan(&conn);
-            // la misma canción y el cel no dijo otra posición: seguir contando
-            // desde donde iba (si no, al pausar o volver saltaría para atrás)
+            // la misma canción y el cel no dijo otra posición (o una casi igual
+            // a la que llevamos): seguir contando desde donde iba. Si no, la
+            // barra y la letra brincaban con cada aviso del cel (y al pausar
+            // o volver, para atrás). Un salto de verdad (adelantó la canción)
+            // sí se sigue.
             if let (Some(n), Some(l)) = (now.as_mut(), last.as_ref()) {
-                if n.title == l.title && n.raw == l.raw {
+                let close = match (n.raw, l.now_pos()) {
+                    (Some(r), Some(p)) => (r - p).abs() < 1.5,
+                    _ => false,
+                };
+                if n.title == l.title && (n.raw == l.raw || close) {
                     n.pos = l.now_pos();
                 }
             }
