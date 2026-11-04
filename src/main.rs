@@ -1226,6 +1226,26 @@ impl App {
 
     // ── letra ──
     fn fetch_lyrics(&mut self) {
+        // la del cel (sin video_id: solo LRCLIB) mientras rola no suena
+        if let Some(c) = self.cel_shown() {
+            let (it, key) = (c.item(), c.key());
+            if self.lyrics.as_ref().is_some_and(|(v, _)| *v == key) {
+                return;
+            }
+            self.lyrics = Some((key.clone(), Lyrics::Loading));
+            self.lyrics_scroll = 0;
+            self.lyrics_hand = None;
+            self.lyrics_auto.set(0);
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let lyrics = match lrclib::synced(&it) {
+                    Some(l) => Lyrics::Synced(l, "LRCLIB".into()),
+                    None => Lyrics::Missing,
+                };
+                let _ = tx.send(Ev::Lyrics { vid: key, lyrics });
+            });
+            return;
+        }
         let Some(it) = self.current().cloned() else { return };
         let Some(vid) = it.video_id.clone() else { return };
         if self.lyrics.as_ref().is_some_and(|(v, _)| *v == vid) {
@@ -1791,7 +1811,24 @@ impl App {
                     c.send("Pause");
                 }
                 self.cel = c;
+                // otra canción en el cel: su letra (si la letra está abierta)
+                if self.lyrics_on && self.cel_shown().is_some() {
+                    self.fetch_lyrics();
+                }
             }
+        }
+    }
+
+    /// Suena algo: rola, o el cel por la laptop (el gatito baila con los dos).
+    pub fn sounding(&self) -> bool {
+        self.playing() || self.cel_shown().is_some_and(|c| c.playing)
+    }
+
+    /// Dónde va lo que suena (s): rola o el cel.
+    pub fn sound_pos(&self) -> Option<f64> {
+        match self.cel_shown() {
+            Some(c) => c.now_pos(),
+            None => self.pos,
         }
     }
 

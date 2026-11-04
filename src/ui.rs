@@ -194,9 +194,9 @@ impl App {
         let face = match self.pet_mood {
             Some((Mood::Love, at)) if at.elapsed() < Duration::from_secs(3) => "(=^♡ω♡^=)",
             Some((Mood::Sad, at)) if at.elapsed() < Duration::from_secs(3) => "(=；ω；=)",
-            _ if self.current().is_none() => "(=^･ω･^=)",
+            _ if self.current().is_none() && self.cel_shown().is_none() => "(=^･ω･^=)",
             _ if self.splash.is_some_and(|s| s.elapsed() < Duration::from_secs(2)) => "(=ﾟωﾟ=)!",
-            _ if !self.playing() => "(=ᵕ ᴗ ᵕ=)ᶻᶻ",
+            _ if !self.sounding() => "(=ᵕ ᴗ ᵕ=)ᶻᶻ",
             _ if !self.cfg.motion => "(=^･ω･^=)♪",
             // baila: un paso cada medio segundo
             _ => ["(=^･ω･^=)♪", "♪(=^･ω･^)", "(=^･ω･^)ノ♪", "♪(=^･ω･^=)"][(self.epoch.elapsed().as_millis() / 500 % 4) as usize],
@@ -240,7 +240,7 @@ impl App {
         let t = self.epoch.elapsed().as_secs_f64();
         (0..n)
             .map(|k| {
-                if !self.playing() || !self.cfg.motion {
+                if !self.sounding() || !self.cfg.motion {
                     return lv[lv.len() / 3];
                 }
                 let k = k as f64;
@@ -415,7 +415,7 @@ impl App {
             return self.draw_rocola(f, inner, it);
         }
         let lines: Vec<Line> = match &self.lyrics {
-            _ if self.current().is_none() => vec![Line::styled(self.tx(s.nothing_playing), muted)],
+            _ if self.current().is_none() && self.cel_shown().is_none() => vec![Line::styled(self.tx(s.nothing_playing), muted)],
             Some((_, Lyrics::Text(text, source))) => {
                 if !source.is_empty() {
                     block = block.title_bottom(Line::styled(format!(" {source} "), Style::new().fg(t.muted)).right_aligned());
@@ -445,7 +445,7 @@ impl App {
         f.render_widget(block, area);
         self.hits.borrow_mut().lyrics = area;
         // la que suena: la última que ya empezó (un pelín antes, que se lee tarde)
-        let pos = self.pos.unwrap_or(0.0) + 0.2;
+        let pos = self.sound_pos().unwrap_or(0.0) + 0.2;
         let cur = lines.iter().rposition(|(at, _)| *at <= pos);
         // cuánto se ha cantado: la línea dura hasta la siguiente, pero sin
         // estirarse en los silencios (lo que se tarda en decirla, más o menos)
@@ -1541,7 +1541,7 @@ impl App {
         f.render_widget(Paragraph::new(now), left);
 
         let (pos, dur) = match cel {
-            Some(c) => (c.pos, c.dur),
+            Some(c) => (c.now_pos(), c.dur),
             None => (self.pos, self.dur),
         };
         let shown = it.is_some() || cel.is_some();
